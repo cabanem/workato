@@ -93,10 +93,11 @@
     (connection['auth_type'] || 'gmail_oauth2') == 'mock' ? { ok: true } : get('me/profile')
   end,
 
-  # ---------- Helpers ----------
   methods: {
     # === Generic decode helpers ===
-    headers_to_hash: lambda { |headers_array| (headers_array || []).each_with_object({}) { |h, m| m[h['name']] = h['value'] } },
+    headers_to_hash: lambda do |headers_array|
+      (headers_array || []).each_with_object({}) { |h, memo| memo[h['name']] = h['value'] }
+    end,
 
     extract_bodies: lambda do |payload|
       out = { text: nil, html: nil }
@@ -184,6 +185,13 @@
         b64.delete!('=')
         b64
       end
+    end,
+
+    b64url_to_b64: lambda do |b64url|
+      return nil unless b64url
+      s = b64url.tr('-_', '+/')
+      s += '=' * ((4 - s.length % 4) % 4)
+      s
     end,
 
     boundary: lambda do
@@ -347,10 +355,13 @@
         body_html: "<p>Hello from <strong>mock</strong> message ##{idx}.</p>",
         payload: { mimeType: 'multipart/alternative', headers: [ { name: 'Subject', value: subj }, { name: 'Message-Id', value: "<#{id}@mock.local>" } ] }
       }
+    end,
+
+    mock_list: lambda do |connection, count = 3|
+      { next_page_token: nil, items: (0..count).map { |i| call('mock_message', connection, i) } }
     end
   },
 
-  # ---------- Schemas ----------
   object_definitions: {
     message_min: {
       fields: -> { [ { name: 'id' }, { name: 'thread_id' } ] }
@@ -402,6 +413,20 @@
           ]}
         ]
       }
+    },
+
+    attachment_out: {
+      fields: -> {
+        [
+          { name: 'message_id' },
+          { name: 'attachment_id' },
+          { name: 'filename' },
+          { name: 'size', type: 'integer' },
+          { name: 'data_base64url', label: 'Data (base64url)' },
+          { name: 'data_base64',    label: 'Data (base64 standard)' },
+          { name: 'text_preview',   hint: 'If UTF-8 decodable and small' }
+        ]
+      }
     }
   },
 
@@ -415,8 +440,27 @@
     end
   },
 
-  # ---------- Actions (the 7 you requested) ----------
   actions: {
+    # --- Test helpers (work in live or mock) ---
+    test_ping: {
+      title: 'Test: ping/echo',
+      input_fields: -> { [ { name: 'message', hint: 'Any text', optional: true } ] },
+      execute: lambda do |connection, input|
+        { mode: (connection['auth_type'] || 'gmail_oauth2'), message: input['message'] || 'pong', at: Time.now.utc.iso8601 }
+      end,
+      output_fields: -> { [ { name: 'mode' }, { name: 'message' }, { name: 'at' } ] }
+    },
+
+    test_generate_messages: {
+      title: 'Test: generate mock messages',
+      input_fields: -> { [ { name: 'count', type: 'integer', hint: 'Default 3', optional: true } ] },
+      execute: lambda do |connection, input|
+        items = (0...(input['count'] || 3).to_i).map { |i| call('mock_message', connection, i) }
+        { next_page_token: nil, items: items.map { |m| { id: m[:id], thread_id: m[:thread_id] } } }
+      end,
+      output_fields: ->(object_definitions, _c, _cfg) { object_definitions['message_min_list'] }
+    },
+
     # (1) users.messages.list
     list_messages: {
       title: 'List messages',
@@ -457,11 +501,7 @@
     get_message_full: {
       title: 'Get message (full parts)',
       subtitle: 'users.messages.get (format=full)',
-      input_fields: -> {
-        [
-          { name: 'message_id', optional: false, label: 'Message ID' }
-        ]
-      },
+      input_fields: -> { [ { name: 'message_id', optional: false, label: 'Message ID' } ] },
       execute: lambda do |connection, input|
         if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
           call('mock_message', connection, 0, id: input['message_id'])
@@ -477,7 +517,7 @@
     modify_message_labels: {
       title: 'Modify message labels',
       subtitle: 'users.messages.modify',
-      help: 'Requires scope gmail.modify or mail.google.com.',
+      help: 'Requires scope gmail.modify (or mail.google.com).',
       input_fields: -> {
         [
           { name: 'message_id', optional: false },
@@ -507,7 +547,7 @@
         [
           { name: 'compose_mode', control_type: 'select', options: [['New','new'], ['Reply','reply'], ['Reply all','reply_all']], default: 'new' },
           { name: 'original_message_id', hint: 'Gmail message ID to reply to (for reply/reply_all)', optional: true },
-          { name: 'from', hint: 'Optional; must be a configured Send As alias' },
+          { name: 'from', hint: 'Optional; must be a configured Send As alias', optional: true },
           { name: 'to', type: 'array', of: 'string', hint: 'List of recipients', optional: true },
           { name: 'cc', type: 'array', of: 'string', optional: true },
           { name: 'bcc', type: 'array', of: 'string', optional: true },
@@ -526,10 +566,7 @@
           m = call('mock_message', connection, 0, subject: input['subject'])
           { id: "d_#{m[:id]}", message: { id: m[:id], threadId: m[:thread_id], snippet: m[:snippet] } }
         else
-          # Prepare reply headers/thread (if any)
           prep = call('prepare_reply', connection, input['compose_mode'], input['original_message_id'], input['subject'])
-
-          # Build MIME
           mime = call('build_mime',
             from: input['from'],
             to: input['to'],
@@ -545,10 +582,8 @@
             attachments: input['attachments']
           )
           raw_b64url = call('to_b64url', mime)
-
           payload = { message: { raw: raw_b64url } }
           payload[:message][:threadId] = prep[:thread_id] if prep[:thread_id].present?
-
           post('me/drafts').payload(payload)
         end
       end,
@@ -581,13 +616,7 @@
       execute: lambda do |connection, input|
         if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
           m = call('mock_message', connection, 0, subject: input['subject'])
-          # Return a message-like object
-          {
-            id: "sent_#{m[:id]}",
-            threadId: m[:thread_id],
-            labelIds: ['SENT'],
-            snippet: m[:snippet]
-          }
+          { id: "sent_#{m[:id]}", threadId: m[:thread_id], labelIds: ['SENT'], snippet: m[:snippet] }
         else
           prep = call('prepare_reply', connection, input['compose_mode'], input['original_message_id'], input['subject'])
           mime = call('build_mime',
@@ -605,10 +634,8 @@
             attachments: input['attachments']
           )
           raw_b64url = call('to_b64url', mime)
-
           body = { raw: raw_b64url }
           body[:threadId] = prep[:thread_id] if prep[:thread_id].present?
-
           post('me/messages/send').payload(body)
         end
       end,
@@ -653,6 +680,120 @@
         end
       end,
       output_fields: ->(object_definitions, _c, _cfg) { object_definitions['label'] }
+    },
+
+    # 8) users.messages.attachments.get
+    get_attachment: {
+      title: 'Get attachment',
+      subtitle: 'users.messages.attachments.get',
+      help: 'Fetches attachment bytes by attachmentId. Returns both base64url (as returned by Gmail) and standard base64 for convenience.',
+      input_fields: -> {
+        [
+          { name: 'message_id', optional: false, label: 'Message ID' },
+          { name: 'attachment_id', optional: false, label: 'Attachment ID' },
+          { name: 'filename', optional: true, hint: 'Optional filename for downstream use' }
+        ]
+      },
+      execute: lambda do |connection, input|
+        if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
+          mock_data = "This is a mock attachment for #{input['attachment_id']}"
+          b64 = [mock_data].pack('m0')
+          b64url = b64.tr('+/', '-_').delete('=')
+          { message_id: input['message_id'], attachment_id: input['attachment_id'], filename: (input['filename'] || 'mock.txt'), size: mock_data.bytesize, data_base64url: b64url, data_base64: b64, text_preview: mock_data }
+        else
+          att = get("me/messages/#{input['message_id']}/attachments/#{input['attachment_id']}")
+          b64url = att['data']
+          b64 = call('b64url_to_b64', b64url)
+          preview = nil
+          begin
+            raw = decode_urlsafe_base64(b64url)
+            if raw.bytesize <= 4096
+              s = raw.dup
+              s.force_encoding('UTF-8')
+              preview = s.valid_encoding? ? s : nil
+            end
+          rescue
+          end
+          { message_id: input['message_id'], attachment_id: input['attachment_id'], filename: input['filename'], size: att['size'], data_base64url: b64url, data_base64: b64, text_preview: preview }
+        end
+      end,
+      output_fields: ->(object_definitions, _c, _cfg) { object_definitions['attachment_out'] }
+    },
+
+    # (9) users.drafts.send
+    send_draft: {
+      title: 'Send draft',
+      subtitle: 'users.drafts.send',
+      help: 'Sends an existing draft by draft ID. Requires gmail.send or gmail.compose.',
+      input_fields: -> { [ { name: 'draft_id', optional: false } ] },
+      execute: lambda do |connection, input|
+        if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
+          { id: "sent_from_#{input['draft_id']}", threadId: "t_#{input['draft_id']}", labelIds: ['SENT'], snippet: 'Mock draft sent.' }
+        else
+          post('me/drafts/send').payload(id: input['draft_id'])
+        end
+      end,
+      output_fields: -> { [ { name: 'id' }, { name: 'threadId' }, { name: 'labelIds', type: 'array', of: 'string' }, { name: 'snippet' } ] }
+    }
+  },
+
+  triggers: {
+    new_message: {
+      title: 'New message (polling)',
+      subtitle: 'Use Gmail query/labels or mock data',
+
+      input_fields: lambda do
+        [
+          { name: 'q', hint: 'e.g., in:inbox -category:promotions', optional: true },
+          { name: 'label_ids', label: 'Filter by labels', type: 'array', of: 'string', control_type: 'multiselect', pick_list: 'labels', optional: true },
+          { name: 'since', label: 'Start from (ISO8601)', type: 'date_time', optional: true },
+          { name: 'include_spam_trash', type: 'boolean', control_type: 'checkbox', label: 'Include Spam/Trash', optional: true },
+          { name: 'page_size', type: 'integer', hint: '1–500 (default 100)', optional: true }
+        ]
+      end,
+
+      poll: lambda do |connection, input, closure|
+        if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
+          events = (0...3).map { |i| call('mock_message', connection, i) }
+          { events: events, next_poll: call('mock_now_ms'), can_poll_more: false }
+        else
+          start_ms =
+            if closure.present?
+              closure.to_i
+            elsif input['since'].present?
+              (input['since'].to_time.to_i * 1000)
+            else
+              ((Time.now.utc.to_i - 3600) * 1000)
+            end
+          after_seconds = start_ms / 1000
+
+          q_parts = []
+          q_parts << input['q'] if input['q'].present?
+          q_parts << "after:#{after_seconds}"
+          q = q_parts.compact.join(' ').strip
+
+          list = get('me/messages')
+                  .params(
+                    q: q,
+                    labelIds: input['label_ids'],
+                    includeSpamTrash: input['include_spam_trash'],
+                    maxResults: (input['page_size'] || 100)
+                  )
+
+          ids = Array(list['messages']).map { |m| m['id'] }
+          events = []
+          unless ids.blank?
+            events = ids.map { |id| call('normalize_message', get("me/messages/#{id}").params(format: 'full')) }
+            max_ms = events.compact.map { |e| e['internal_date'] }.compact.map { |t| Time.parse(t).to_i * 1000 }.max
+            closure = max_ms if max_ms
+          end
+          { events: events, next_poll: closure, can_poll_more: false }
+        end
+      end,
+
+      dedup: ->(record) { "#{record['id']}@#{record['internal_date']}" },
+      output_fields: ->(object_definitions, _connection, _config) { object_definitions['message_full'] },
+      sample_output: -> { {} }
     }
   }
 }
