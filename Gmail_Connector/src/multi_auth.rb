@@ -2,13 +2,11 @@
   title: 'Gmail (OAuth + Mock)',
 
   connection: {
-    # 1) Choose auth mode at connection time
     fields: [
       {
         name: 'auth_type',
         label: 'Authentication mode',
         control_type: 'select',
-        # Use `options` for connection fields (pick_lists aren’t available here)
         options: [
           ['Gmail OAuth (live)', 'gmail_oauth2'],
           ['Mock (no auth)', 'mock']
@@ -18,38 +16,23 @@
       }
     ],
 
-    # 2) Multi-auth: choose an auth flow by key via `selected`; define flows in `options`
     authorization: {
       type: 'multi',
 
-      selected: lambda do |connection|
-        connection['auth_type'] || 'gmail_oauth2'
-      end,
+      selected: lambda { |connection| connection['auth_type'] || 'gmail_oauth2' },
 
       options: {
-        # ---- Live Gmail OAuth2 flow ----
         gmail_oauth2: {
           type: 'oauth2',
 
+          # Connection-scoped toggles for least privilege
           fields: [
             { name: 'client_id', optional: false, hint: 'Google Cloud OAuth 2.0 Client ID' },
             { name: 'client_secret', control_type: 'password', optional: false, hint: 'Google Cloud OAuth 2.0 Client Secret' },
-
-            # Scope toggles (least-privilege default)
-            {
-              name: 'enable_modify',
-              label: 'Allow modify (gmail.modify)',
-              type: 'boolean',
-              control_type: 'checkbox',
-              optional: true
-            },
-            {
-              name: 'enable_send',
-              label: 'Allow sending (gmail.send)',
-              type: 'boolean',
-              control_type: 'checkbox',
-              optional: true
-            }
+            { name: 'enable_modify', label: 'Allow modify (gmail.modify)', type: 'boolean', control_type: 'checkbox' },
+            { name: 'enable_send',   label: 'Allow send (gmail.send)',   type: 'boolean', control_type: 'checkbox' },
+            { name: 'enable_compose',label: 'Allow compose/drafts (gmail.compose)', type: 'boolean', control_type: 'checkbox' },
+            { name: 'enable_labels', label: 'Allow label admin (gmail.labels)', type: 'boolean', control_type: 'checkbox' }
           ],
 
           authorization_url: lambda do |connection|
@@ -57,8 +40,10 @@
               'https://www.googleapis.com/auth/gmail.readonly',
               'https://www.googleapis.com/auth/gmail.metadata'
             ]
-            scopes << 'https://www.googleapis.com/auth/gmail.modify' if connection['enable_modify']
-            scopes << 'https://www.googleapis.com/auth/gmail.send'   if connection['enable_send']
+            scopes << 'https://www.googleapis.com/auth/gmail.modify'  if connection['enable_modify']
+            scopes << 'https://www.googleapis.com/auth/gmail.send'    if connection['enable_send']
+            scopes << 'https://www.googleapis.com/auth/gmail.compose' if connection['enable_compose']
+            scopes << 'https://www.googleapis.com/auth/gmail.labels'  if connection['enable_labels']
 
             "https://accounts.google.com/o/oauth2/v2/auth" \
               "?response_type=code" \
@@ -69,75 +54,56 @@
           end,
 
           token_url: -> { 'https://oauth2.googleapis.com/token' },
-
           client_id: ->(connection) { connection['client_id'] },
           client_secret: ->(connection) { connection['client_secret'] },
-
           apply: ->(_connection, access_token) { headers('Authorization': "Bearer #{access_token}") },
 
           refresh_on: [401, 403],
           refresh: lambda do |connection, refresh_token|
-            response = post('https://oauth2.googleapis.com/token')
-                        .payload(
-                          grant_type: 'refresh_token',
-                          refresh_token: refresh_token,
-                          client_id: connection['client_id'],
-                          client_secret: connection['client_secret']
-                        )
-                        .request_format_www_form_urlencoded
-            { access_token: response['access_token'], refresh_token: response['refresh_token'] }
+            post('https://oauth2.googleapis.com/token')
+              .payload(
+                grant_type: 'refresh_token',
+                refresh_token: refresh_token,
+                client_id: connection['client_id'],
+                client_secret: connection['client_secret']
+              )
+              .request_format_www_form_urlencoded
           end
         },
 
-        # ---- Mock flow (no external auth) ----
         mock: {
           type: 'custom_auth',
-
           fields: [
             { name: 'mock_user_email', label: 'Mock user email', default: 'mock.user@example.com', optional: true },
-            { name: 'mock_seed', label: 'Mock seed (optional)', hint: 'Any string to vary the sample data', optional: true }
+            { name: 'mock_seed', label: 'Mock seed (optional)', optional: true }
           ],
-
-          # Add a header for clarity in logs; no token required
           apply: ->(_connection) { headers('X-Mock': 'true') }
         }
       }
     },
 
-    # 3) Base URI can be dynamic by auth mode
     base_uri: lambda do |connection|
-      if (connection['auth_type'] || 'gmail_oauth2') == 'gmail_oauth2'
-        'https://gmail.googleapis.com/gmail/v1/users'
-      else
-        # Not used, but set to a non-routable host by convention
+      (connection['auth_type'] || 'gmail_oauth2') == 'gmail_oauth2' ?
+        'https://gmail.googleapis.com/gmail/v1/users' :
         'https://mock.local/unused'
-      end
     end
   },
 
-  # 4) Connection test for both modes
   test: lambda do |connection|
-    if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
-      # Succeed without HTTP in mock mode
-      { ok: true, email: (connection['mock_user_email'] || 'mock.user@example.com') }
-    else
-      # Gmail: confirms auth and quota
-      get('me/profile')
-    end
+    (connection['auth_type'] || 'gmail_oauth2') == 'mock' ? { ok: true } : get('me/profile')
   end,
 
-  # ---------- Helper methods ----------
+  # ---------- Helpers ----------
   methods: {
-    headers_to_hash: lambda do |headers_array|
-      (headers_array || []).each_with_object({}) { |h, memo| memo[h['name']] = h['value'] }
-    end,
+    # === Generic decode helpers ===
+    headers_to_hash: lambda { |headers_array| (headers_array || []).each_with_object({}) { |h, m| m[h['name']] = h['value'] } },
 
     extract_bodies: lambda do |payload|
       out = { text: nil, html: nil }
       queue = [payload].compact
       while (part = queue.shift)
         mime = part['mimeType']
-        data = (part.dig('body', 'data'))
+        data = part.dig('body', 'data')
         if data.present?
           begin
             content = decode_urlsafe_base64(data)
@@ -172,17 +138,193 @@
         date: headers['Date'],
         message_id_header: headers['Message-Id'],
         body_text: bodies[:text],
-        body_html: bodies[:html]
+        body_html: bodies[:html],
+        payload: msg['payload']
       }
     end,
 
-    # -------- Mock data helpers --------
+    # === MIME builders ===
+    join_addr: lambda do |val|
+      case val
+      when nil then nil
+      when String then val
+      when Array then val.compact.reject(&:blank?).join(', ')
+      else val.to_s
+      end
+    end,
+
+    ensure_re: lambda do |subject|
+      s = subject.to_s
+      s =~ /\A\s*(re|sv|aw)\s*:/i ? s : "Re: #{s}"
+    end,
+
+    # Encode data URL or base64 or plain string to base64 (standard) for attachments
+    to_b64: lambda do |content|
+      str =
+        if content.is_a?(String) && content.start_with?('data:')
+          content.split(',', 2)[1].to_s # already base64
+        else
+          begin
+            encode_base64(content.to_s)
+          rescue
+            [content.to_s].pack('m0')
+          end
+        end
+      # strip CRLFs if any
+      str.to_s.gsub(/\s+/, '')
+    end,
+
+    to_b64url: lambda do |raw|
+      begin
+        encode_urlsafe_base64(raw)
+      rescue
+        # Fallback: standard b64 then URL-safe transform (remove padding)
+        b64 = [raw].pack('m0')
+        b64.tr!('+/', '-_')
+        b64.delete!('=')
+        b64
+      end
+    end,
+
+    boundary: lambda do
+      "----workato-#{(Time.now.to_f * 1000).to_i}-#{rand(36**8).to_s(36)}"
+    end,
+
+    fetch_attachment_bytes: lambda do |url|
+      begin
+        get(url).response_format_raw
+      rescue
+        nil
+      end
+    end,
+
+    # Build RFC 2822 MIME; supports text, html, attachments, and custom headers.
+    build_mime: lambda do |opts|
+      from        = opts[:from]
+      to          = call('join_addr', opts[:to])
+      cc          = call('join_addr', opts[:cc])
+      bcc         = call('join_addr', opts[:bcc])
+      reply_to    = call('join_addr', opts[:reply_to])
+      subject     = opts[:subject].to_s
+      text_body   = opts[:text_body]
+      html_body   = opts[:html_body]
+      attachments = Array(opts[:attachments])
+      extra_hdrs  = Array(opts[:headers]).map { |h| [h['name'], h['value']] }
+
+      # Start headers
+      lines = []
+      lines << "From: #{from}" if from.present?
+      lines << "To: #{to}" if to.present?
+      lines << "Cc: #{cc}" if cc.present?
+      lines << "Bcc: #{bcc}" if bcc.present?
+      lines << "Reply-To: #{reply_to}" if reply_to.present?
+      lines << "Subject: #{subject}"
+      lines << "MIME-Version: 1.0"
+
+      # In-Reply-To / References if provided by caller
+      if opts[:in_reply_to].present?
+        lines << "In-Reply-To: #{opts[:in_reply_to]}"
+      end
+      if opts[:references].present?
+        refs = Array(opts[:references]).join(' ')
+        lines << "References: #{refs}"
+      end
+
+      extra_hdrs.each { |name, value| lines << "#{name}: #{value}" }
+
+      # Build body parts
+      crlf = "\r\n"
+      body = nil
+
+      if attachments.present?
+        # multipart/mixed
+        mix_b = call('boundary')
+        lines << "Content-Type: multipart/mixed; boundary=\"#{mix_b}\""
+        body = []
+
+        # Part 1: text/alternative (if both), else single text or html
+        if text_body.present? && html_body.present?
+          alt_b = call('boundary')
+          body << "--#{mix_b}#{crlf}Content-Type: multipart/alternative; boundary=\"#{alt_b}\"#{crlf}#{crlf}" \
+                  "--#{alt_b}#{crlf}Content-Type: text/plain; charset=\"UTF-8\"#{crlf}Content-Transfer-Encoding: 7bit#{crlf}#{crlf}#{text_body}#{crlf}" \
+                  "--#{alt_b}#{crlf}Content-Type: text/html; charset=\"UTF-8\"#{crlf}Content-Transfer-Encoding: 7bit#{crlf}#{crlf}#{html_body}#{crlf}" \
+                  "--#{alt_b}--#{crlf}"
+        elsif html_body.present?
+          body << "--#{mix_b}#{crlf}Content-Type: text/html; charset=\"UTF-8\"#{crlf}Content-Transfer-Encoding: 7bit#{crlf}#{crlf}#{html_body}#{crlf}"
+        else
+          body << "--#{mix_b}#{crlf}Content-Type: text/plain; charset=\"UTF-8\"#{crlf}Content-Transfer-Encoding: 7bit#{crlf}#{crlf}#{text_body.to_s}#{crlf}"
+        end
+
+        # Attachment parts
+        attachments.each do |att|
+          filename  = att['filename'] || att[:filename] || 'attachment.bin'
+          mime_type = att['mime_type'] || att[:mime_type] || 'application/octet-stream'
+          raw =
+            if att['content'].present? || att[:content].present?
+              (att['content'] || att[:content]).to_s
+            elsif att['url'].present? || att[:url].present?
+              call('fetch_attachment_bytes', (att['url'] || att[:url]).to_s) || ''
+            else
+              ''
+            end
+          encoded = call('to_b64', raw)
+          body << "--#{mix_b}#{crlf}Content-Type: #{mime_type}; name=\"#{filename}\"#{crlf}" \
+                  "Content-Transfer-Encoding: base64#{crlf}" \
+                  "Content-Disposition: attachment; filename=\"#{filename}\"#{crlf}#{crlf}" \
+                  "#{encoded}#{crlf}"
+        end
+
+        body << "--#{mix_b}--#{crlf}"
+        body = body.join
+      else
+        # No attachments
+        if text_body.present? && html_body.present?
+          alt_b = call('boundary')
+          lines << "Content-Type: multipart/alternative; boundary=\"#{alt_b}\""
+          body = "--#{alt_b}#{crlf}Content-Type: text/plain; charset=\"UTF-8\"#{crlf}Content-Transfer-Encoding: 7bit#{crlf}#{crlf}#{text_body}#{crlf}" \
+                 "--#{alt_b}#{crlf}Content-Type: text/html; charset=\"UTF-8\"#{crlf}Content-Transfer-Encoding: 7bit#{crlf}#{crlf}#{html_body}#{crlf}" \
+                 "--#{alt_b}--#{crlf}"
+        elsif html_body.present?
+          lines << "Content-Type: text/html; charset=\"UTF-8\""
+          lines << "Content-Transfer-Encoding: 7bit"
+          body = html_body + crlf
+        else
+          lines << "Content-Type: text/plain; charset=\"UTF-8\""
+          lines << "Content-Transfer-Encoding: 7bit"
+          body = text_body.to_s + crlf
+        end
+      end
+
+      (lines.join(crlf) + crlf + crlf + body.to_s)
+    end,
+
+    # === Reply preparation (fetches original if needed) ===
+    prepare_reply: lambda do |connection, compose_mode, original_message_id, provided_subject|
+      return { thread_id: nil, in_reply_to: nil, references: nil, subject: provided_subject } if compose_mode == 'new' || original_message_id.blank?
+
+      if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
+        subj = provided_subject.presence || call('ensure_re', "Mock subject")
+        return { thread_id: "t_mock_#{original_message_id}", in_reply_to: "<#{original_message_id}@mock.local>", references: ["<#{original_message_id}@mock.local>"], subject: subj }
+      end
+
+      # Fetch only headers to reduce payload
+      original = get("me/messages/#{original_message_id}")
+                  .params(format: 'metadata', metadataHeaders: ['Subject', 'Message-Id', 'References'])
+      hdrs = call('headers_to_hash', original.dig('payload', 'headers'))
+      thread_id = original['threadId']
+      msg_id    = hdrs['Message-Id']
+      refs      = (hdrs['References'].to_s.split(/\s+/) + [msg_id]).compact.uniq
+      subj      = provided_subject.presence || call('ensure_re', hdrs['Subject'].to_s)
+      { thread_id: thread_id, in_reply_to: msg_id, references: refs, subject: subj }
+    end,
+
+    # === Mock data ===
     mock_now_ms: -> { (Time.now.utc.to_f * 1000).to_i },
 
     mock_message: lambda do |connection, idx = 0, overrides = {}|
       seed = (connection['mock_seed'] || 'seed')
       base_ms = call('mock_now_ms') - (idx * 60_000)
-      id = "m_#{base_ms}_#{idx}_#{seed.hash.abs % 1000}"
+      id = overrides[:id] || "m_#{base_ms}_#{idx}_#{seed.hash.abs % 1000}"
       subj = overrides[:subject] || "Mock subject ##{idx}"
       from = overrides[:from]    || 'Sender <sender@example.com>'
       to   = overrides[:to]      || (connection['mock_user_email'] || 'mock.user@example.com')
@@ -202,51 +344,44 @@
         date: Time.at(base_ms / 1000).utc.rfc2822,
         message_id_header: "<#{id}@mock.local>",
         body_text: "Hello from mock message ##{idx}.\nThis is test content.",
-        body_html: "<p>Hello from <strong>mock</strong> message ##{idx}.</p>"
+        body_html: "<p>Hello from <strong>mock</strong> message ##{idx}.</p>",
+        payload: { mimeType: 'multipart/alternative', headers: [ { name: 'Subject', value: subj }, { name: 'Message-Id', value: "<#{id}@mock.local>" } ] }
       }
-    end,
-
-    mock_list: lambda do |connection, count = 3|
-      { next_page_token: nil, items: (0...count).map { |i| call('mock_message', connection, i) } }
     end
   },
 
   # ---------- Schemas ----------
   object_definitions: {
-    message: {
-      fields: lambda do
-        [
-          { name: 'id' },
-          { name: 'thread_id' },
-          { name: 'history_id' },
-          { name: 'label_ids', type: 'array', of: 'string' },
-          { name: 'snippet' },
-          { name: 'size_estimate', type: 'integer' },
-          { name: 'internal_date', type: 'date_time' },
-          { name: 'subject' },
-          { name: 'from' },
-          { name: 'to' },
-          { name: 'cc' },
-          { name: 'bcc' },
-          { name: 'date' },
-          { name: 'message_id_header' },
-          { name: 'body_text' },
-          { name: 'body_html' }
-        ]
-      end
+    message_min: {
+      fields: -> { [ { name: 'id' }, { name: 'thread_id' } ] }
     },
 
-    message_list: {
-      fields: lambda do |_connection, _config_fields, object_definitions|
+    message_full: {
+      fields: -> {
+        [
+          { name: 'id' }, { name: 'thread_id' }, { name: 'history_id' },
+          { name: 'label_ids', type: 'array', of: 'string' },
+          { name: 'snippet' }, { name: 'size_estimate', type: 'integer' },
+          { name: 'internal_date', type: 'date_time' },
+          { name: 'subject' }, { name: 'from' }, { name: 'to' }, { name: 'cc' }, { name: 'bcc' }, { name: 'date' },
+          { name: 'message_id_header' },
+          { name: 'body_text' }, { name: 'body_html' },
+          { name: 'payload', type: 'object' }
+        ]
+      }
+    },
+
+    message_min_list: {
+      fields: ->(_connection, _config_fields, object_definitions) {
         [
           { name: 'next_page_token', label: 'Next page token' },
-          { name: 'items', type: 'array', of: 'object', properties: object_definitions['message'] }
+          { name: 'items', type: 'array', of: 'object', properties: object_definitions['message_min'] }
         ]
-      end
+      }
     },
 
     label: {
-      fields: lambda do
+      fields: -> {
         [
           { name: 'id' }, { name: 'name' },
           { name: 'messageListVisibility' }, { name: 'labelListVisibility' }, { name: 'type' },
@@ -254,11 +389,22 @@
           { name: 'messagesTotal', type: 'integer' }, { name: 'messagesUnread', type: 'integer' },
           { name: 'threadsTotal', type: 'integer' }, { name: 'threadsUnread', type: 'integer' }
         ]
-      end
+      }
+    },
+
+    draft: {
+      fields: -> {
+        [
+          { name: 'id' },
+          { name: 'message', type: 'object', properties: [
+            { name: 'id' }, { name: 'threadId' }, { name: 'labelIds', type: 'array', of: 'string' },
+            { name: 'snippet' }, { name: 'sizeEstimate', type: 'integer' }
+          ]}
+        ]
+      }
     }
   },
 
-  # ---------- Pick lists ----------
   pick_lists: {
     labels: lambda do |connection|
       if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
@@ -269,62 +415,25 @@
     end
   },
 
-  # ---------- Actions ----------
+  # ---------- Actions (the 7 you requested) ----------
   actions: {
-    # Simple test action to validate recipes in mock/live
-    test_ping: {
-      title: 'Test: ping/echo',
-      input_fields: -> { [ { name: 'message', hint: 'Any text', optional: true } ] },
-      execute: lambda do |connection, input|
-        {
-          mode: (connection['auth_type'] || 'gmail_oauth2'),
-          message: input['message'] || 'pong',
-          at: Time.now.utc.iso8601
-        }
-      end,
-      output_fields: -> { [ { name: 'mode' }, { name: 'message' }, { name: 'at' } ] }
-    },
-
-    # Produce mock messages regardless of Gmail availability
-    test_generate_messages: {
-      title: 'Test: generate mock messages',
-      input_fields: -> { [ { name: 'count', type: 'integer', hint: 'Default 3', optional: true } ] },
-      execute: lambda do |connection, input|
-        call('mock_list', connection, (input['count'] || 3).to_i)
-      end,
-      output_fields: lambda do |object_definitions, _connection, _config|
-        object_definitions['message_list']
-      end
-    },
-
-    search_messages: {
-      title: 'Search messages',
-      subtitle: 'Gmail `q` syntax + optional labels',
-
-      input_fields: lambda do
+    # (1) users.messages.list
+    list_messages: {
+      title: 'List messages',
+      subtitle: 'users.messages.list',
+      input_fields: -> {
         [
-          { name: 'q', hint: 'e.g., from:alice newer_than:7d has:attachment', optional: true },
+          { name: 'q', hint: 'Gmail search, e.g., from:alice newer_than:7d has:attachment', optional: true },
           { name: 'label_ids', label: 'Filter by labels', type: 'array', of: 'string', control_type: 'multiselect', pick_list: 'labels', optional: true },
-          { name: 'include_spam_trash', type: 'boolean', control_type: 'checkbox', label: 'Include Spam/Trash', optional: true },
-          { name: 'max_results', type: 'integer', hint: '1–500 (Gmail defaults to 100)', optional: true },
-          { name: 'page_token', label: 'Page token', sticky: true, optional: true },
-          {
-            name: 'format',
-            control_type: 'select',
-            options: [
-              ['full (headers+bodies)', 'full'],
-              ['metadata (headers only)', 'metadata'],
-              ['minimal (ids+thread)', 'minimal']
-            ],
-            optional: true
-          },
-          { name: 'metadata_headers', type: 'array', of: 'string', optional: true }
+          { name: 'include_spam_trash', type: 'boolean', control_type: 'checkbox', optional: true },
+          { name: 'max_results', type: 'integer', hint: '1–500 (Gmail default 100)', optional: true },
+          { name: 'page_token', label: 'Page token', sticky: true, optional: true }
         ]
-      end,
-
+      },
       execute: lambda do |connection, input|
         if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
-          call('mock_list', connection, 3)
+          items = (0...3).map { |i| m = call('mock_message', connection, i); { id: m[:id], thread_id: m[:thread_id] } }
+          { next_page_token: nil, items: items }
         else
           resp = get('me/messages')
                   .params(
@@ -334,170 +443,216 @@
                     maxResults: (input['max_results'] || 20),
                     pageToken: input['page_token']
                   )
-          ids = Array(resp['messages']).map { |m| m['id'] }
-          return { next_page_token: resp['nextPageToken'], items: [] } if ids.blank?
-
-          fmt = (input['format'].presence || 'full')
-          items = ids.map do |id|
-            detail = get("me/messages/#{id}").params(format: fmt, metadataHeaders: input['metadata_headers'])
-            call('normalize_message', detail)
-          end
-          { next_page_token: resp['nextPageToken'], items: items }
+          {
+            next_page_token: resp['nextPageToken'],
+            items: Array(resp['messages']).map { |m| { id: m['id'], thread_id: m['threadId'] } }
+          }
         end
       end,
-
-      output_fields: lambda do |object_definitions, _connection, _config|
-        object_definitions['message_list']
-      end,
-
+      output_fields: ->(object_definitions, _connection, _config) { object_definitions['message_min_list'] },
       sample_output: -> { { next_page_token: nil, items: [] } }
     },
 
-    get_message: {
-      title: 'Get message',
-      input_fields: lambda do
+    # (2) users.messages.get (format=full)
+    get_message_full: {
+      title: 'Get message (full parts)',
+      subtitle: 'users.messages.get (format=full)',
+      input_fields: -> {
         [
-          { name: 'message_id', optional: false },
-          {
-            name: 'format',
-            control_type: 'select',
-            options: [
-              ['full (headers+bodies)', 'full'],
-              ['metadata (headers only)', 'metadata'],
-              ['minimal (ids+thread)', 'minimal'],
-              ['raw (base64 URL-safe)', 'raw']
-            ],
-            optional: true
-          },
-          { name: 'metadata_headers', type: 'array', of: 'string', optional: true }
+          { name: 'message_id', optional: false, label: 'Message ID' }
         ]
-      end,
-
+      },
       execute: lambda do |connection, input|
         if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
           call('mock_message', connection, 0, id: input['message_id'])
         else
-          fmt = (input['format'].presence || 'full')
-          msg = get("me/messages/#{input['message_id']}").params(format: fmt, metadataHeaders: input['metadata_headers'])
-          fmt == 'raw' ? { id: msg['id'], raw: msg['raw'], thread_id: msg['threadId'] } : call('normalize_message', msg)
+          msg = get("me/messages/#{input['message_id']}").params(format: 'full')
+          call('normalize_message', msg)
         end
       end,
-
-      output_fields: lambda do |_object_definitions, _connection, _config|
-        [
-          { name: 'id' }, { name: 'thread_id' }, { name: 'raw' },
-          { name: 'subject' }, { name: 'from' }, { name: 'to' }, { name: 'cc' }, { name: 'bcc' }, { name: 'date' },
-          { name: 'label_ids', type: 'array', of: 'string' }, { name: 'internal_date', type: 'date_time' },
-          { name: 'snippet' }, { name: 'body_text' }, { name: 'body_html' }
-        ]
-      end
+      output_fields: ->(object_definitions, _connection, _config) { object_definitions['message_full'] }
     },
 
+    # (3) users.messages.modify
+    modify_message_labels: {
+      title: 'Modify message labels',
+      subtitle: 'users.messages.modify',
+      help: 'Requires scope gmail.modify or mail.google.com.',
+      input_fields: -> {
+        [
+          { name: 'message_id', optional: false },
+          { name: 'add_label_ids',    type: 'array', of: 'string', control_type: 'multiselect', pick_list: 'labels', optional: true },
+          { name: 'remove_label_ids', type: 'array', of: 'string', control_type: 'multiselect', pick_list: 'labels', optional: true }
+        ]
+      },
+      execute: lambda do |connection, input|
+        if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
+          add = Array(input['add_label_ids'])
+          remove = Array(input['remove_label_ids'])
+          { id: input['message_id'], labelIds: (['INBOX'] + add - remove).uniq, threadId: "t_#{input['message_id']}" }
+        else
+          post("me/messages/#{input['message_id']}/modify")
+            .payload(addLabelIds: Array(input['add_label_ids']).presence, removeLabelIds: Array(input['remove_label_ids']).presence)
+        end
+      end,
+      output_fields: -> { [ { name: 'id' }, { name: 'labelIds', type: 'array', of: 'string' }, { name: 'threadId' } ] }
+    },
+
+    # (4) users.drafts.create
+    create_draft: {
+      title: 'Create draft',
+      subtitle: 'users.drafts.create',
+      help: 'Builds RFC 2822 message and creates a draft. Use compose mode = reply/reply_all to target an existing thread.',
+      input_fields: -> {
+        [
+          { name: 'compose_mode', control_type: 'select', options: [['New','new'], ['Reply','reply'], ['Reply all','reply_all']], default: 'new' },
+          { name: 'original_message_id', hint: 'Gmail message ID to reply to (for reply/reply_all)', optional: true },
+          { name: 'from', hint: 'Optional; must be a configured Send As alias' },
+          { name: 'to', type: 'array', of: 'string', hint: 'List of recipients', optional: true },
+          { name: 'cc', type: 'array', of: 'string', optional: true },
+          { name: 'bcc', type: 'array', of: 'string', optional: true },
+          { name: 'reply_to', type: 'array', of: 'string', optional: true },
+          { name: 'subject', optional: true },
+          { name: 'text_body', optional: true },
+          { name: 'html_body', optional: true },
+          { name: 'headers', type: 'array', of: 'object', properties: [ { name: 'name' }, { name: 'value' } ], optional: true },
+          { name: 'attachments', type: 'array', of: 'object', optional: true, properties: [
+              { name: 'filename' }, { name: 'mime_type' }, { name: 'content', hint: 'data: URI, base64, or raw text' }, { name: 'url', hint: 'If provided, connector will fetch bytes' }
+            ] }
+        ]
+      },
+      execute: lambda do |connection, input|
+        if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
+          m = call('mock_message', connection, 0, subject: input['subject'])
+          { id: "d_#{m[:id]}", message: { id: m[:id], threadId: m[:thread_id], snippet: m[:snippet] } }
+        else
+          # Prepare reply headers/thread (if any)
+          prep = call('prepare_reply', connection, input['compose_mode'], input['original_message_id'], input['subject'])
+
+          # Build MIME
+          mime = call('build_mime',
+            from: input['from'],
+            to: input['to'],
+            cc: input['cc'],
+            bcc: input['bcc'],
+            reply_to: input['reply_to'],
+            subject: prep[:subject],
+            text_body: input['text_body'],
+            html_body: input['html_body'],
+            headers: input['headers'],
+            in_reply_to: prep[:in_reply_to],
+            references: prep[:references],
+            attachments: input['attachments']
+          )
+          raw_b64url = call('to_b64url', mime)
+
+          payload = { message: { raw: raw_b64url } }
+          payload[:message][:threadId] = prep[:thread_id] if prep[:thread_id].present?
+
+          post('me/drafts').payload(payload)
+        end
+      end,
+      output_fields: ->(object_definitions, _c, _cfg) { object_definitions['draft'] }
+    },
+
+    # (5) users.messages.send
+    send_message: {
+      title: 'Send message (new / reply / reply-all)',
+      subtitle: 'users.messages.send',
+      help: 'Requires gmail.send (or gmail.compose/mail.google.com). For threaded replies, we set threadId, In-Reply-To and References automatically when you provide original_message_id.',
+      input_fields: -> {
+        [
+          { name: 'compose_mode', control_type: 'select', options: [['New','new'], ['Reply','reply'], ['Reply all','reply_all']], default: 'new' },
+          { name: 'original_message_id', hint: 'Gmail message ID to reply to (for reply/reply_all)', optional: true },
+          { name: 'from', hint: 'Optional; must be a configured Send As alias', optional: true },
+          { name: 'to', type: 'array', of: 'string', optional: true },
+          { name: 'cc', type: 'array', of: 'string', optional: true },
+          { name: 'bcc', type: 'array', of: 'string', optional: true },
+          { name: 'reply_to', type: 'array', of: 'string', optional: true },
+          { name: 'subject', optional: true },
+          { name: 'text_body', optional: true },
+          { name: 'html_body', optional: true },
+          { name: 'headers', type: 'array', of: 'object', properties: [ { name: 'name' }, { name: 'value' } ], optional: true },
+          { name: 'attachments', type: 'array', of: 'object', optional: true, properties: [
+              { name: 'filename' }, { name: 'mime_type' }, { name: 'content', hint: 'data: URI, base64, or raw text' }, { name: 'url', hint: 'If provided, connector will fetch bytes' }
+            ] }
+        ]
+      },
+      execute: lambda do |connection, input|
+        if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
+          m = call('mock_message', connection, 0, subject: input['subject'])
+          # Return a message-like object
+          {
+            id: "sent_#{m[:id]}",
+            threadId: m[:thread_id],
+            labelIds: ['SENT'],
+            snippet: m[:snippet]
+          }
+        else
+          prep = call('prepare_reply', connection, input['compose_mode'], input['original_message_id'], input['subject'])
+          mime = call('build_mime',
+            from: input['from'],
+            to: input['to'],
+            cc: input['cc'],
+            bcc: input['bcc'],
+            reply_to: input['reply_to'],
+            subject: prep[:subject],
+            text_body: input['text_body'],
+            html_body: input['html_body'],
+            headers: input['headers'],
+            in_reply_to: prep[:in_reply_to],
+            references: prep[:references],
+            attachments: input['attachments']
+          )
+          raw_b64url = call('to_b64url', mime)
+
+          body = { raw: raw_b64url }
+          body[:threadId] = prep[:thread_id] if prep[:thread_id].present?
+
+          post('me/messages/send').payload(body)
+        end
+      end,
+      output_fields: -> { [ { name: 'id' }, { name: 'threadId' }, { name: 'labelIds', type: 'array', of: 'string' }, { name: 'snippet' } ] }
+    },
+
+    # (6) users.labels.list
     list_labels: {
       title: 'List labels',
+      subtitle: 'users.labels.list',
       execute: lambda do |connection|
         if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
-          { items: [ { id: 'INBOX', name: 'INBOX' }, { id: 'UNREAD', name: 'UNREAD' }, { id: 'STARRED', name: 'STARRED' } ] }
+          { items: [ { id: 'INBOX', name: 'INBOX', type: 'system' }, { id: 'UNREAD', name: 'UNREAD', type: 'system' }, { id: 'STARRED', name: 'STARRED', type: 'system' } ] }
         else
           { items: get('me/labels')['labels'] }
         end
       end,
-      output_fields: lambda do |object_definitions, _connection, _config|
-        [ { name: 'items', type: 'array', of: 'object', properties: object_definitions['label'] } ]
-      end,
-      sample_output: -> { { items: [] } }
+      output_fields: ->(object_definitions, _c, _cfg) { [ { name: 'items', type: 'array', of: 'object', properties: object_definitions['label'] } ] }
     },
 
-    modify_message: {
-      title: 'Modify message (labels / read state)',
-      help: 'Requires gmail.modify scope (enable on the connection).',
-      input_fields: lambda do
+    # (7) users.labels.create
+    create_label: {
+      title: 'Create label',
+      subtitle: 'users.labels.create',
+      help: 'Requires gmail.labels or gmail.modify (or mail.google.com).',
+      input_fields: -> {
         [
-          { name: 'message_id', optional: false },
-          { name: 'add_label_ids', type: 'array', of: 'string', control_type: 'multiselect', pick_list: 'labels', optional: true },
-          { name: 'remove_label_ids', type: 'array', of: 'string', control_type: 'multiselect', pick_list: 'labels', optional: true },
-          { name: 'mark_as_read', type: 'boolean', control_type: 'checkbox', hint: 'Removes the UNREAD label' }
+          { name: 'name', optional: false },
+          { name: 'labelListVisibility', control_type: 'select', options: [['labelShow', 'labelShow'], ['labelShowIfUnread', 'labelShowIfUnread'], ['labelHide', 'labelHide']], optional: true },
+          { name: 'messageListVisibility', control_type: 'select', options: [['show', 'show'], ['hide', 'hide']], optional: true },
+          { name: 'color', type: 'object', optional: true, properties: [
+            { name: 'backgroundColor', hint: '#RRGGBB' },
+            { name: 'textColor', hint: '#RRGGBB' }
+          ] }
         ]
-      end,
-
+      },
       execute: lambda do |connection, input|
         if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
-          # Simulate label changes
-          add = Array(input['add_label_ids'])
-          remove = Array(input['remove_label_ids'])
-          remove << 'UNREAD' if input['mark_as_read']
-          { id: input['message_id'], labelIds: (['INBOX'] + add - remove).uniq, threadId: "t_#{input['message_id']}" }
+          { id: "Label_#{Time.now.to_i}", name: input['name'], type: 'user', labelListVisibility: (input['labelListVisibility'] || 'labelShow'), messageListVisibility: (input['messageListVisibility'] || 'show') }
         else
-          add = Array(input['add_label_ids']).dup
-          remove = Array(input['remove_label_ids']).dup
-          remove << 'UNREAD' if input['mark_as_read']
-          post("me/messages/#{input['message_id']}/modify")
-            .payload(addLabelIds: add.presence, removeLabelIds: remove.presence)
+          post('me/labels').payload(input)
         end
       end,
-
-      output_fields: -> { [ { name: 'id' }, { name: 'labelIds', type: 'array', of: 'string' }, { name: 'threadId' } ] }
-    }
-  },
-
-  # ---------- Triggers ----------
-  triggers: {
-    new_message: {
-      title: 'New message (polling)',
-      subtitle: 'Use Gmail query/labels or mock data',
-
-      input_fields: lambda do
-        [
-          { name: 'q', hint: 'e.g., in:inbox -category:promotions', optional: true },
-          { name: 'label_ids', label: 'Filter by labels', type: 'array', of: 'string', control_type: 'multiselect', pick_list: 'labels', optional: true },
-          { name: 'since', label: 'Start from (ISO8601)', type: 'date_time', optional: true },
-          { name: 'include_spam_trash', type: 'boolean', control_type: 'checkbox', label: 'Include Spam/Trash', optional: true },
-          { name: 'page_size', type: 'integer', hint: '1–500 (default 100)', optional: true }
-        ]
-      end,
-
-      poll: lambda do |connection, input, closure|
-        if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
-          events = (0...3).map { |i| call('mock_message', connection, i) }
-          { events: events, next_poll: call('mock_now_ms'), can_poll_more: false }
-        else
-          start_ms =
-            if closure.present?
-              closure.to_i
-            elsif input['since'].present?
-              (input['since'].to_time.to_i * 1000)
-            else
-              ((Time.now.utc.to_i - 3600) * 1000)
-            end
-          after_seconds = start_ms / 1000
-
-          q_parts = []
-          q_parts << input['q'] if input['q'].present?
-          q_parts << "after:#{after_seconds}"
-          q = q_parts.compact.join(' ').strip
-
-          list = get('me/messages')
-                  .params(
-                    q: q,
-                    labelIds: input['label_ids'],
-                    includeSpamTrash: input['include_spam_trash'],
-                    maxResults: (input['page_size'] || 100)
-                  )
-
-          ids = Array(list['messages']).map { |m| m['id'] }
-          events = []
-          unless ids.blank?
-            events = ids.map { |id| call('normalize_message', get("me/messages/#{id}").params(format: 'full')) }
-            max_ms = events.compact.map { |e| e['internal_date'] }.compact.map { |t| Time.parse(t).to_i * 1000 }.max
-            closure = max_ms if max_ms
-          end
-          { events: events, next_poll: closure, can_poll_more: false }
-        end
-      end,
-
-      dedup: ->(record) { "#{record['id']}@#{record['internal_date']}" },
-      output_fields: ->(object_definitions, _connection, _config) { object_definitions['message'] },
-      sample_output: -> { {} }
+      output_fields: ->(object_definitions, _c, _cfg) { object_definitions['label'] }
     }
   }
 }
