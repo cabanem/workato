@@ -86,12 +86,12 @@
       (connection['auth_type'] || 'gmail_oauth2') == 'gmail_oauth2' ?
         'https://gmail.googleapis.com/gmail/v1/users' :
         'https://mock.local/unused'
+    end,
+
+    test: lambda do |connection|
+      (connection['auth_type'] || 'gmail_oauth2') == 'mock' ? { ok: true } : get('me/profile')
     end
   },
-
-  test: lambda do |connection|
-    (connection['auth_type'] || 'gmail_oauth2') == 'mock' ? { ok: true } : get('me/profile')
-  end,
 
   methods: {
     # === Generic decode helpers ===
@@ -326,6 +326,39 @@
       { thread_id: thread_id, in_reply_to: msg_id, references: refs, subject: subj }
     end,
 
+    flatten_attachments_from_payload: lambda do |payload|
+      results = []
+      queue = [payload].compact
+      while (part = queue.shift)
+        part_id = part['partId']
+        filename = part['filename']
+        mime = part['mimeType']
+        body = part['body'] || {}
+        attach_id = body['attachmentId']
+        size = body['size']
+        h = call('headers_to_hash', part['headers'])
+        content_id = h['Content-Id'] || h['Content-ID']
+        content_disp = h['Content-Disposition']
+
+        if attach_id.present? || filename.to_s.strip != ''
+          results << {
+            part_id: part_id,
+            filename: filename,
+            mime_type: mime,
+            attachment_id: attach_id,
+            size: size,
+            content_id: content_id,
+            content_disposition: content_dis,
+            is_inline: (!!content_id || content_disp.to_s.downcase.include? ('inline'))
+          }
+        end
+        
+        parts = part['parts']
+        queue.concat(parts) if parts.is_a?(Array)
+      end
+      results
+    end,
+
     # === Mock data ===
     mock_now_ms: -> { (Time.now.utc.to_f * 1000).to_i },
 
@@ -427,6 +460,31 @@
           { name: 'text_preview',   hint: 'If UTF-8 decodable and small' }
         ]
       }
+    },
+
+    attachment_meta: {
+      fields: -> {
+        [
+          { name: 'message_id' },
+          { name: 'part_id' },
+          { name: 'attachment_id' },
+          { name: 'filename' },
+          { name: 'mime_type' },
+          { name: 'size', type: 'integer' },
+          { name: 'content_id' },
+          { name: 'content_disposition' },
+          { name: 'is_inline', type: 'boolean' }
+        ]
+      }
+    },
+
+    attachment_meta_list: {
+      fields: ->(_c, _cfg, object_definitions) {
+        [
+          { name: 'items', type: 'array', of: 'object', properties: object_definitions['attachment_meta'] },
+          { name: 'total_count', type: 'integer' }
+        ]
+      }
     }
   },
 
@@ -441,7 +499,7 @@
   },
 
   actions: {
-    # --- Test helpers (work in live or mock) ---
+    # ----- Test Helpers -----
     test_ping: {
       title: 'Test: ping/echo',
       input_fields: -> { [ { name: 'message', hint: 'Any text', optional: true } ] },
@@ -450,7 +508,6 @@
       end,
       output_fields: -> { [ { name: 'mode' }, { name: 'message' }, { name: 'at' } ] }
     },
-
     test_generate_messages: {
       title: 'Test: generate mock messages',
       input_fields: -> { [ { name: 'count', type: 'integer', hint: 'Default 3', optional: true } ] },
@@ -458,9 +515,10 @@
         items = (0...(input['count'] || 3).to_i).map { |i| call('mock_message', connection, i) }
         { next_page_token: nil, items: items.map { |m| { id: m[:id], thread_id: m[:thread_id] } } }
       end,
-      output_fields: ->(object_definitions, _c, _cfg) { object_definitions['message_min_list'] }
+      output_fields: ->(object_definitions) { object_definitions['message_min_list'] }
     },
 
+    # ----- Core Actions -----
     # (1) users.messages.list
     list_messages: {
       title: 'List messages',
@@ -493,7 +551,7 @@
           }
         end
       end,
-      output_fields: ->(object_definitions, _connection, _config) { object_definitions['message_min_list'] },
+      output_fields: ->(object_definitions) { object_definitions['message_min_list'] },
       sample_output: -> { { next_page_token: nil, items: [] } }
     },
 
@@ -510,7 +568,7 @@
           call('normalize_message', msg)
         end
       end,
-      output_fields: ->(object_definitions, _connection, _config) { object_definitions['message_full'] }
+      output_fields: ->(object_definitions) { object_definitions['message_full'] }
     },
 
     # (3) users.messages.modify
@@ -587,7 +645,7 @@
           post('me/drafts').payload(payload)
         end
       end,
-      output_fields: ->(object_definitions, _c, _cfg) { object_definitions['draft'] }
+      output_fields: ->(object_definitions) { object_definitions['draft'] }
     },
 
     # (5) users.messages.send
@@ -653,7 +711,7 @@
           { items: get('me/labels')['labels'] }
         end
       end,
-      output_fields: ->(object_definitions, _c, _cfg) { [ { name: 'items', type: 'array', of: 'object', properties: object_definitions['label'] } ] }
+      output_fields: ->(object_definitions) { [ { name: 'items', type: 'array', of: 'object', properties: object_definitions['label'] } ] }
     },
 
     # (7) users.labels.create
@@ -679,7 +737,7 @@
           post('me/labels').payload(input)
         end
       end,
-      output_fields: ->(object_definitions, _c, _cfg) { object_definitions['label'] }
+      output_fields: ->(object_definitions) { object_definitions['label'] }
     },
 
     # 8) users.messages.attachments.get
@@ -717,7 +775,7 @@
           { message_id: input['message_id'], attachment_id: input['attachment_id'], filename: input['filename'], size: att['size'], data_base64url: b64url, data_base64: b64, text_preview: preview }
         end
       end,
-      output_fields: ->(object_definitions, _c, _cfg) { object_definitions['attachment_out'] }
+      output_fields: ->(object_definitions) { object_definitions['attachment_out'] }
     },
 
     # (9) users.drafts.send
@@ -734,6 +792,35 @@
         end
       end,
       output_fields: -> { [ { name: 'id' }, { name: 'threadId' }, { name: 'labelIds', type: 'array', of: 'string' }, { name: 'snippet' } ] }
+    },
+
+    # (10) enumerate attachments - helper
+    list_message_attachments: {
+      title: 'List message attachments (metadata)',
+      subtitle: 'Helper: enumerate filename/mime/attachments',
+      input_fields: -> {
+        [
+          { name: 'message_id', optional: false, label: 'Message ID' },
+          { name: 'include_inline', type: 'boolean', control_type: 'checkbox', hint: 'Include inline parts (Content-ID/inline)', optional: true }
+        ]
+      },
+      execute: lambda do |connection, input|
+        if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
+          items = [
+            { message_id: input['message_id'], part_id: '2', attachment_id: 'att_mock_pdf', filename: 'spec.pdf',  mime_type: 'application/pdf', size: 1024, content_disposition: 'attachment; filename="spec.pdf"', is_inline: false },
+            { message_id: input['message_id'], part_id: '3', attachment_id: 'att_mock_png', filename: 'logo.png', mime_type: 'image/png',       size: 512,  content_id: '<logo@mock>', content_disposition: 'inline; filename="logo.png"', is_inline: true }
+          ]
+          items = items.reject { |i| i[:is_inline] } unless input['include_inline']
+          { items: items, total_count: items.length }
+        else
+          msg = get("me/messages/#{input['message_id']}").params(format: 'full')
+          attachments = call('flatten_attachments_from_payload', msg['payload'])
+          attachments = attachments.reject { |i| i[:is_inline] } unless input['include_inline']
+          items = attachments.map { |a| a.merge(message_id: input['message_id']) }
+          { items: items, total_count: items.length }
+        end
+      end,
+      output_fields: ->(object_definitions) { object_definitions['attachment_meta_list'] }
     }
   },
 
