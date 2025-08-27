@@ -332,8 +332,8 @@
       while (part = queue.shift)
         part_id = part['partId']
         filename = part['filename']
-        mime = part['mimeType']
-        body = part['body'] || {}
+        mime     = part['mimeType']
+        body     = part['body'] || {}
         attach_id = body['attachmentId']
         size = body['size']
         h = call('headers_to_hash', part['headers'])
@@ -348,11 +348,11 @@
             attachment_id: attach_id,
             size: size,
             content_id: content_id,
-            content_disposition: content_dis,
-            is_inline: (!!content_id || content_disp.to_s.downcase.include? ('inline'))
+            content_disposition: content_disp,
+            is_inline: (!!content_id || content_disp.to_s.downcase.include?('inline'))
           }
         end
-        
+
         parts = part['parts']
         queue.concat(parts) if parts.is_a?(Array)
       end
