@@ -634,7 +634,13 @@
     modify_message_labels: {
       title: 'Modify message labels',
       subtitle: 'users.messages.modify',
-      help: 'Requires scope gmail.modify (or mail.google.com).',
+      help: ->(connection {
+        msg = 'Requires scope `gmail.modify` (or `mail.google.com`).'
+        unless connection['enabled_modify']
+          msg += 'This connection does not have `gmail.modify` enabled.'
+        end
+        msg
+      }),
       input_fields: -> {
         [
           { name: 'message_id', optional: false },
@@ -659,7 +665,13 @@
     create_draft: {
       title: 'Create draft',
       subtitle: 'users.drafts.create',
-      help: 'Builds RFC 2822 message and creates a draft. Use compose mode = reply/reply_all to target an existing thread.',
+      help: ->(connection) {
+        msg = 'Builds RFC 2822 message and creates a draft. Use compose mode = reply/reply_all to target an existing thread. Requires gmail.send (or gmail.compose / mail.google.com).'
+        unless (connection['enable_send'] || connection['enable_compose'])
+          msg += ' ⚠️ Neither “Allow send” nor “Allow compose/drafts” is enabled in this connection.'
+        end
+        msg
+      },
       input_fields: -> {
         [
           { name: 'compose_mode', control_type: 'select', options: [['New','new'], ['Reply','reply'], ['Reply all','reply_all']], default: 'new' },
@@ -711,7 +723,13 @@
     send_message: {
       title: 'Send message (new / reply / reply-all)',
       subtitle: 'users.messages.send',
-      help: 'Requires gmail.send (or gmail.compose/mail.google.com). For threaded replies, we set threadId, In-Reply-To and References automatically when you provide original_message_id.',
+      help: ->(connection) {
+        msg = 'Requires gmail.send (or gmail.compose / mail.google.com).'
+        unless (connection['enable_send'] || connection['enable_compose'])
+          msg += ' ⚠️ Neither “Allow send” nor “Allow compose/drafts” is enabled in this connection.'
+        end
+        msg
+      },
       input_fields: -> {
         [
           { name: 'compose_mode', control_type: 'select', options: [['New','new'], ['Reply','reply'], ['Reply all','reply_all']], default: 'new' },
@@ -776,8 +794,14 @@
     # (7) users.labels.create
     create_label: {
       title: 'Create label',
-      subtitle: 'users.labels.create',
-      help: 'Requires gmail.labels or gmail.modify (or mail.google.com).',
+      subtitle: 'users.labels.create',    
+      help: ->(connection) {
+        msg = 'Requires gmail.labels or gmail.modify (or mail.google.com).'
+        unless (connection['enable_labels'] || connection['enable_modify'])
+          msg += ' ⚠️ This connection currently lacks label permissions.'
+        end
+        msg
+      },
       input_fields: -> {
         [
           { name: 'name', optional: false },
