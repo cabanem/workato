@@ -361,11 +361,15 @@
       results
     end,
 
-    # === Search prep ===
+    # === Visual Gmail query ===
     quote_search_val: lambda do |val|
       s = val.to_s.strip
-      # Quote if contains whitespace or parentheses
-      s =~ /[\s()]/ ? "\"#{s.gsub('"','\"')}\"" : s
+      if s =~ /[\s()]/
+        escaped = s.gsub(/"/, '\"')
+        "\"#{escaped}\""
+      else
+        s
+      end
     end,
 
     build_gmail_query: lambda do |input|
@@ -396,7 +400,6 @@
       end
 
       if input['exclude_query'].present?
-        # Allow developers to exclude chunks in one go
         parts << "-(#{input['exclude_query']})"
       end
 
@@ -914,8 +917,24 @@
 
       input_fields: lambda do
         [
+          # Type a raw Gmail query for 'q' parm
           { name: 'q', hint: 'e.g., in:inbox -category:promotions', optional: true },
-          { name: 'label_ids', label: 'Filter by labels', type: 'array', of: 'string', control_type: 'multiselect', pick_list: 'labels', optional: true },
+
+          # Visual query builder helpers (optional)
+          { name: 'from',    hint: 'From email (exact or partial)', optional: true },
+          { name: 'to',      hint: 'To email (exact or partial)', optional: true },
+          { name: 'subject', hint: 'Subject contains', optional: true },
+          { name: 'category', control_type: 'select', optional: true,
+            options: [['Primary','primary'], ['Social','social'], ['Promotions','promotions'], ['Updates','updates'], ['Forums','forums']] },
+          { name: 'has_attachment', type: 'boolean', control_type: 'checkbox', optional: true },
+          { name: 'unread_only',    type: 'boolean', control_type: 'checkbox', optional: true },
+          { name: 'newer_than_days', type: 'integer', hint: 'e.g., 7 → newer_than:7d', optional: true },
+          { name: 'older_than_days', type: 'integer', hint: 'e.g., 30 → older_than:30d', optional: true },
+          { name: 'exclude_query',   hint: 'Exclude patterns, e.g., category:promotions OR label:newsletters', optional: true },
+
+          # Existing filters
+          { name: 'label_ids', label: 'Filter by labels', type: 'array', of: 'string',
+            control_type: 'multiselect', pick_list: 'labels', optional: true },
           { name: 'since', label: 'Start from (ISO8601)', type: 'date_time', optional: true },
           { name: 'include_spam_trash', type: 'boolean', control_type: 'checkbox', label: 'Include Spam/Trash', optional: true },
           { name: 'page_size', type: 'integer', hint: '1–500 (default 100)', optional: true }
@@ -937,10 +956,8 @@
             end
           after_seconds = start_ms / 1000
 
-          q_parts = []
-          q_parts << input['q'] if input['q'].present?
-          q_parts << "after:#{after_seconds}"
-          q = q_parts.compact.join(' ').strip
+          base_q = call('build_gmail_query', input)
+          q = [base_q, "after:#{after_seconds}"].reject(&:blank?).join(' ').strip
 
           list = get('me/messages')
                   .params(
@@ -957,6 +974,7 @@
             max_ms = events.compact.map { |e| e['internal_date'] }.compact.map { |t| Time.parse(t).to_i * 1000 }.max
             closure = max_ms if max_ms
           end
+
           { events: events, next_poll: closure, can_poll_more: false }
         end
       end,
