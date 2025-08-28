@@ -139,7 +139,7 @@
         date: headers['Date'],
         message_id_header: headers['Message-Id'],
         # Deep link directly to message
-        web_link: (headers['Message-Id'].present? ?"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A#{CGI.escape(headers['Message-Id'])}" : nil),
+        web_link: (headers['Message-Id'].present? ? "https://mail.google.com/mail/u/0/#search/rfc822msgid%3A#{CGI.escape(headers['Message-Id'])}" : nil),
         body_text: bodies[:text],
         body_html: bodies[:html],
         payload: msg['payload']
@@ -590,7 +590,6 @@
           { name: 'include_spam_trash', type: 'boolean', control_type: 'checkbox', optional: true },
           { name: 'max_results', type: 'integer', hint: '1–500 (Gmail default 100)', optional: true },
           { name: 'page_token', label: 'Page token', sticky: true, optional: true }
-        ]
         ]
       },
         execute: lambda do |connection, input|
