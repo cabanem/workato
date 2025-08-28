@@ -359,6 +359,48 @@
       results
     end,
 
+    # === Search prep ===
+    quote_search_val: lambda do |val|
+      s = val.to_s.strip
+      # Quote if contains whitespace or parentheses
+      s =~ /[\s()]/ ? "\"#{s.gsub('"','\"')}\"" : s
+    end,
+
+    build_gmail_query: lambda do |input|
+      parts = []
+      base = input['q'].to_s.strip
+      parts << base unless base.blank?
+
+      if input['from'].present?
+        parts << "from:#{call('quote_search_val', input['from'])}"
+      end
+      if input['to'].present?
+        parts << "to:#{call('quote_search_val', input['to'])}"
+      end
+      if input['subject'].present?
+        parts << "subject:#{call('quote_search_val', input['subject'])}"
+      end
+      if input['category'].present?
+        parts << "category:#{input['category']}"
+      end
+      parts << 'has:attachment' if input['has_attachment']
+      parts << 'is:unread'      if input['unread_only']
+
+      if input['newer_than_days'].present?
+        parts << "newer_than:#{input['newer_than_days']}d"
+      end
+      if input['older_than_days'].present?
+        parts << "older_than:#{input['older_than_days']}d"
+      end
+
+      if input['exclude_query'].present?
+        # Allow developers to exclude chunks in one go
+        parts << "-(#{input['exclude_query']})"
+      end
+
+      parts.compact.join(' ').squeeze(' ')
+    end,
+
     # === Mock data ===
     mock_now_ms: -> { (Time.now.utc.to_f * 1000).to_i },
 
@@ -525,30 +567,44 @@
       subtitle: 'users.messages.list',
       input_fields: -> {
         [
-          { name: 'q', hint: 'Gmail search, e.g., from:alice newer_than:7d has:attachment', optional: true },
-          { name: 'label_ids', label: 'Filter by labels', type: 'array', of: 'string', control_type: 'multiselect', pick_list: 'labels', optional: true },
+          { name: 'q', hint: 'Gmail search, e.g., from:alice newer_than:7d has:attachment', optional: true, label: "Query"  },
+          { name: 'from',    hint: 'From email (exact or partial)', optional: true },
+          { name: 'to',      hint: 'To email (exact or partial)', optional: true },
+          { name: 'subject', hint: 'Subject contains', optional: true },
+          { name: 'category', control_type: 'select', optional: true,
+            options: [['Primary','primary'], ['Social','social'], ['Promotions','promotions'], ['Updates','updates'], ['Forums','forums']] },
+          { name: 'has_attachment', type: 'boolean', control_type: 'checkbox', optional: true },
+          { name: 'unread_only',    type: 'boolean', control_type: 'checkbox', optional: true },
+          { name: 'newer_than_days', type: 'integer', hint: 'e.g., 7 → newer_than:7d', optional: true },
+          { name: 'older_than_days', type: 'integer', hint: 'e.g., 30 → older_than:30d', optional: true },
+          { name: 'exclude_query',   hint: 'e.g., category:promotions OR label:newsletters', optional: true },
+
+          { name: 'label_ids', label: 'Filter by labels', type: 'array', of: 'string',
+            control_type: 'multiselect', pick_list: 'labels', optional: true },
           { name: 'include_spam_trash', type: 'boolean', control_type: 'checkbox', optional: true },
           { name: 'max_results', type: 'integer', hint: '1–500 (Gmail default 100)', optional: true },
           { name: 'page_token', label: 'Page token', sticky: true, optional: true }
         ]
+        ]
       },
-      execute: lambda do |connection, input|
-        if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
-          items = (0...3).map { |i| m = call('mock_message', connection, i); { id: m[:id], thread_id: m[:thread_id] } }
-          { next_page_token: nil, items: items }
-        else
-          resp = get('me/messages')
-                  .params(
-                    q: input['q'],
-                    labelIds: input['label_ids'],
-                    includeSpamTrash: input['include_spam_trash'],
-                    maxResults: (input['max_results'] || 20),
-                    pageToken: input['page_token']
-                  )
-          {
-            next_page_token: resp['nextPageToken'],
-            items: Array(resp['messages']).map { |m| { id: m['id'], thread_id: m['threadId'] } }
-          }
+        execute: lambda do |connection, input|
+          if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
+            items = (0...3).map { |i| m = call('mock_message', connection, i); { id: m[:id], thread_id: m[:thread_id] } }
+            { next_page_token: nil, items: items }
+          else
+            compiled_q = call('build_gmail_query', input) # ← use helper
+            resp = get('me/messages')
+                    .params(
+                      q: compiled_q,
+                      labelIds: input['label_ids'],
+                      includeSpamTrash: input['include_spam_trash'],
+                      maxResults: (input['max_results'] || 20),
+                      pageToken: input['page_token']
+                    )
+            {
+              next_page_token: resp['nextPageToken'],
+              items: Array(resp['messages']).map { |m| { id: m['id'], thread_id: m['threadId'] } }
+            }
         end
       end,
       output_fields: ->(object_definitions) { object_definitions['message_min_list'] },
