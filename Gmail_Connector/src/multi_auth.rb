@@ -138,6 +138,8 @@
         bcc: headers['Bcc'],
         date: headers['Date'],
         message_id_header: headers['Message-Id'],
+        # Deep link directly to message
+        web_link: (headers['Message-Id'].present? ?"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A#{CGI.escape(headers['Message-Id'])}" : nil),
         body_text: bodies[:text],
         body_html: bodies[:html],
         payload: msg['payload']
@@ -451,6 +453,7 @@
           { name: 'internal_date', type: 'date_time' },
           { name: 'subject' }, { name: 'from' }, { name: 'to' }, { name: 'cc' }, { name: 'bcc' }, { name: 'date' },
           { name: 'message_id_header' },
+          { name: 'web_link' },
           { name: 'body_text' }, { name: 'body_html' },
           { name: 'payload', type: 'object' }
         ]
