@@ -573,8 +573,8 @@
       subtitle: 'users.messages.list',
       input_fields: -> {
         [
-          { name: 'q', hint: 'Gmail search, e.g., from:alice newer_than:7d has:attachment', optional: true, label: "Query"  },
-          { name: 'from',    hint: 'From email (exact or partial)', optional: true },
+          { name: 'q', label: "Query", hint: 'Gmail search, e.g., from:alice newer_than:7d has:attachment', optional: true, label: "Query"  },
+          { name: 'from', label: "From", hint: 'From email (exact or partial)', optional: true },
           { name: 'to',      hint: 'To email (exact or partial)', optional: true },
           { name: 'subject', hint: 'Subject contains', optional: true },
           { name: 'category', control_type: 'select', optional: true,
