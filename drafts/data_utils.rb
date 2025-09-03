@@ -67,9 +67,9 @@ require 'time'
         date_entry: {
             fields: ->(_connection, _config_fields) {
                 [
-                    { name: 'date',  label: 'Date',  type: :date,    optional: true, sticky: true },
-                    { name: 'units', label: 'Units', type: :integer, hint: 'E.g. 1, 0.5, 2, etc.', optional: true, sticky: true },
-                    { name: 'status', label: 'Status', type: :string, optional: true, sticky: true }
+                    { name: 'date',  label: 'Date',  type: 'date',    optional: true, sticky: true, convert_input: 'date_conversion', convert_output: 'date_conversion' },
+                    { name: 'units', label: 'Units', type: 'number',  hint: 'E.g. 1, 0.5, 2, etc.', optional: true, sticky: true },
+                    { name: 'status', label: 'Status', type: 'string', optional: true, sticky: true }
                 ]
             }
         },
@@ -271,8 +271,8 @@ require 'time'
                                 type: :date,
                                 label: 'Date',
                                 optional: true, 
-                                render_input: 'date_conversion',
-                                parse_output: 'date_conversion',
+                                convert_input: 'date_conversion',
+                                convert_output: 'date_conversion',
                                 sticky: true
                             }
                         ]
