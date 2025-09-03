@@ -642,10 +642,16 @@ require 'time'
             if config_fields['sample_record'].present?
                 record = config_fields['sample_record']
                 record = JSON.parse(record) if record.is_a?(String)
-                record.keys.map { |k| [k, k.split('_').map(&:capitalize).join(' ')] }
-                    .sort_by(&:last)
+                record.keys
+                  .map { |k| [k.split('_').map(&:capitalize).join(' '), k] }
+                  .sort_by(&:first)
             else
-              [['Created time', 'created_time'], ['Last modified time', 'last_modified_time'], ['Last get', 'last_get']]
+                [
+                    ['Created time', 'created_time'],
+                    ['Last modified time', 'last_modified_time'],
+                    ['Last get', 'last_get'],
+                    ['Last verified', 'last_verified']
+                ]
             end
         },
         email_types_general: -> {
