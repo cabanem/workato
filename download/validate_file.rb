@@ -36,7 +36,7 @@ def hex_sample(bytes, n=32)
   bytes[0, n].to_s.each_byte.map { |b| "%02x" % b }.join
 end
 
-def looks_like_magic?(bytes)
+def file_struct_heuristics(bytes)
   return :pdf if bytes.start_with?("%PDF-")
   return :zip if bytes.start_with?("PK\x03\x04") || bytes.start_with?("PK\x05\x06") || bytes.start_with?("PK\x07\x08")
   return :ole if bytes.start_with?("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1".b)
@@ -45,25 +45,21 @@ def looks_like_magic?(bytes)
 end
 
 def likely_base64_string?(s)
-  # Fast rejects
+  # Early out
   return false if s.nil? || s.empty?
-  # If the raw string contains NUL, it's almost certainly binary already
-  return false if s.include?("\x00")
-  # Strip data URI prefix if present
-  if s.start_with?('data:') && s.include?(';base64,')
-    return true
-  end
+  return false if s.include?("\x00") # likely binary if raw contains NUL **smells like
+  return true  if s.start_with?('data:') && s.include?(';base64,') # Strip data URI prefix if present
   scrub = s.gsub(/\s+/, '')
   return false unless scrub.length % 4 == 0
   return false unless scrub.match?(/\A[A-Za-z0-9+\/]*={0,2}\z/)
-  # Try decoding safely
+  # Try decoding -- safely
   begin
     decoded = Base64.strict_decode64(scrub)
   rescue
     return false
   end
   # Heuristic: decoded should look like known stuct or have enough non-text bytes
-  return true if [:pdf, :zip, :ole].include?(looks_like_magic?(decoded))
+  return true if [:pdf, :zip, :ole].include?(file_struct_heuristics(decoded))
   non_printable = decoded.each_byte.count { |b| b < 9 || (b > 13 && b < 32) }
   (non_printable.to_f / [decoded.bytesize,1].max) > 0.05
 end
@@ -89,7 +85,7 @@ def decode_if_base64(raw)
 end
 
 def detect_container(bytes)
-  case looks_like_magic?(bytes)
+  case file_struct_heuristics(bytes)
   when :pdf then ['pdf', 'pdf']
   when :zip then ['zip', 'unknown']
   when :ole then ['ole', 'doc'] # OLE CFB common for .doc/.xls/.ppt; we default to 'doc'
@@ -113,7 +109,7 @@ def check_pdf(bytes)
 
   details[:version] = bytes[5, 3].to_s # e.g., "1.7"
 
-  # EOF marker near end (allowing some whitespace after)
+  # EOF marker near end
   eof_pos = bytes.rindex("%%EOF")
   details[:has_eof] = !eof_pos.nil?
   details[:eof_pos] = eof_pos
@@ -133,7 +129,7 @@ def check_pdf(bytes)
       details[:xref_offset] = xref_off
       if xref_off >= 0 && xref_off < bytes.bytesize
         slice = bytes[xref_off, 16_384].to_s
-        # Valid if classic 'xref' table OR an object header for xref stream
+        # Valid if 'xref' table OR object header for xref stream
         xref_ok = slice.start_with?("xref") || slice.match?(/\A\d+\s+\d+\s+obj/)
         details[:xref_target_ok] = xref_ok
         unless xref_ok
@@ -165,7 +161,8 @@ def check_pdf(bytes)
   [verdict, reasons, details]
 end
 
-# ---- ZIP/DOCX/XLSX/PPTX integrity checks -----------------------------------
+# ---- ZIP / OOXML integrity checks ----
+# docx/xlsx/pptx
 def find_eocd(bytes)
   # EOCD signature 'PK\x05\x06' can be up to 65,535 + 22 bytes from EOF
   max_scan = [bytes.bytesize, 70_000].min
@@ -205,9 +202,7 @@ def check_zip(bytes)
   ok = true
 
   eocd_off = find_eocd(bytes)
-  if eocd_off.nil?
-    return ['corrupt', ['EOCD not found (not a valid ZIP)'], { eocd_found: false }]
-  end
+  return ['corrupt', ['EOCD not found (not a valid ZIP)'], { eocd_found: false }, 'zip-other'] if eocd_off.nil?
   details[:eocd_found] = true
   details[:eocd_offset] = eocd_off
 
@@ -238,36 +233,38 @@ def check_zip(bytes)
     reasons << err
   end
 
-  details[:entries_count] = names.length
-  sample = names.take(10)
-  details[:entries_sample] = sample
+  details[:entries_count]  = names.length
+  details[:entries_sample] = names.take(10)
 
   # Classify OOXML types
   kind = 'zip-other'
   if names.include?('[Content_Types].xml')
     if names.any? { |n| n.start_with?('word/') }
       kind = 'docx'
-      details[:ooxml_core_present] = names.include?('word/document.xml')
-      ok &&= details[:ooxml_core_present]
-      reasons << "Missing word/document.xml" unless details[:ooxml_core_present]
+      core = names.include?('word/document.xml')
+      details[:ooxml_core_present] = core
+      ok &&= core
+      reasons << "Missing word/document.xml" unless core
     elsif names.any? { |n| n.start_with?('xl/') }
       kind = 'xlsx'
-      details[:ooxml_core_present] = names.include?('xl/workbook.xml')
-      ok &&= details[:ooxml_core_present]
-      reasons << "Missing xl/workbook.xml" unless details[:ooxml_core_present]
+      core = names.include?('xl/workbook.xml')
+      details[:ooxml_core_present] = core
+      ok &&= core
+      reasons << "Missing xl/workbook.xml" unless core
     elsif names.any? { |n| n.start_with?('ppt/') }
       kind = 'pptx'
-      details[:ooxml_core_present] = names.include?('ppt/presentation.xml')
-      ok &&= details[:ooxml_core_present]
-      reasons << "Missing ppt/presentation.xml" unless details[:ooxml_core_present]
+      core = names.include?('ppt/presentation.xml')
+      details[:ooxml_core_present] = core
+      ok &&= core
+      reasons << "Missing ppt/presentation.xml" unless core
     end
   end
 
-  verdict = ok ? 'ok' : 'corrupt'
-  [verdict, reasons, details, kind]
+  [ok ? 'ok' : 'corrupt', reasons, details, kind]
 end
 
-# ---- OLE/CFB (legacy .doc/.xls/.ppt) checks --------------------------------
+# ---- OLE/CFB checks ----
+# legacy .doc/.xls/.ppt
 def check_ole(bytes)
   reasons = []
   details = {}
@@ -275,9 +272,7 @@ def check_ole(bytes)
 
   sig_ok = bytes.start_with?("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1".b)
   details[:header_signature_ok] = sig_ok
-  unless sig_ok
-    return ['corrupt', ['Missing OLE/CFB header signature'], details, 'unknown']
-  end
+  return ['corrupt', ['Missing OLE/CFB header signature'], details, 'unknown'] unless sig_ok
 
   # Byte order should be 0xFFFE @ offset 28..29
   byte_order = bytes[28, 2]
@@ -296,23 +291,28 @@ def check_ole(bytes)
   end
 
   # Heuristic size sanity
-  ok &&= bytes.bytesize >= 1536 # small guard; many valid files are larger
+  ok &&= bytes.bytesize >= 1536 # small guard
   reasons << "File too small for OLE container" if bytes.bytesize < 1536
 
-  # We cannot fully parse streams without extra code; mark 'suspect' if basics pass but we aren't certain.
+  # Cannot completely parse streams w/o extra code; mark 'suspect'
   verdict = ok ? 'suspect' : 'corrupt'
   [verdict, reasons, details, 'doc']
 end
 
 # ---- MAIN -------------------------------------------------------------------
 # 1) Gather inputs
-raw_in      = input['file_content'] || raise('file_content is required')
-file_name   = (input['file_name'].to_s.strip.empty? ? nil : input['file_name'].to_s)
-mime_hint   = (input['mime_type'].to_s.strip.empty? ? nil : input['mime_type'].to_s)
-enc_hint    = (input['encoding_hint'].to_s.strip.empty? ? 'auto' : input['encoding_hint'].to_s.downcase)
-expected    = (input['expected_sha256'].to_s.strip.empty? ? nil : input['expected_sha256'].to_s.downcase)
+raw_in    = input['file_content'] or raise('file_content is required')
+file_name = (input['file_name'].to_s.strip.empty? ? nil : input['file_name'].to_s)
+mime_hint = (input['mime_type'].to_s.strip.empty? ? nil : input['mime_type'].to_s)
+enc_hint  = (input['encoding_hint'].to_s.strip.empty? ? 'auto' : input['encoding_hint'].to_s.downcase)
+expected  = (input['expected_sha256'].to_s.strip.empty? ? nil : input['expected_sha256'].to_s.downcase)
 
-# 2) Determine encoding and decode if necessary
+emit_raw  = input['emit_raw_bytes'].to_s.strip.downcase
+emit_raw  = %w[true 1 yes y].include?(emit_raw) # default false
+raw_max   = input['raw_bytes_max'].to_i
+raw_max   = 5_242_880 if raw_max <= 0 # ~5 MB default
+
+# 2) Determine encoding, decode prn
 content_encoding_detected = nil
 decoded = nil
 base64_len = nil
@@ -343,7 +343,14 @@ elsif enc_hint == 'base64'
       details: { error: 'base64 decode failed' },
       header_hex_sample: nil,
       used_filename: file_name,
-      used_mime_type: mime_hint
+      used_mime_type: mime_hint,
+      normalized_base64: nil,
+      normalized_base64_length: 0,
+      normalized_data_uri: nil,
+      roundtrip_ok: false,
+      decoded_bytes_available: false,
+      decoded_bytes_omitted_reason: "base64 decode failed",
+      decoded_bytes: nil
     }
   end
 else
@@ -367,7 +374,14 @@ else
         details: { error: 'base64 decode failed' },
         header_hex_sample: nil,
         used_filename: file_name,
-        used_mime_type: mime_hint
+        used_mime_type: mime_hint,
+        normalized_base64: nil,
+        normalized_base64_length: 0,
+        normalized_data_uri: nil,
+        roundtrip_ok: false,
+        decoded_bytes_available: false,
+        decoded_bytes_omitted_reason: "base64 decode failed",
+        decoded_bytes: nil
       }
     end
   else
@@ -420,7 +434,7 @@ end
 is_corrupt = (verdict == 'corrupt')
 
 # 4) Build output
-{
+output = {
   content_encoding_detected: content_encoding_detected,
   container_detected: container,
   file_kind: kind,
@@ -433,7 +447,18 @@ is_corrupt = (verdict == 'corrupt')
   details: details,
   header_hex_sample: hex_sample(decoded, 32),
   used_filename: file_name,
-  used_mime_type: mime_hint
+  used_mime_type: mime_hint,
+
+  # Resend-ready encodings
+  normalized_base64: normalized_base64,
+  normalized_base64_length: normalized_base64_length,
+  normalized_data_uri: normalized_data_uri,
+  roundtrip_ok: roundtrip_ok,
+
+  # Raw bytes (optional)
+  decoded_bytes_available: decoded_bytes_available,
+  decoded_bytes_omitted_reason: decoded_bytes_omitted_reason,
+  decoded_bytes: decoded_bytes_out
 }
 
 # ========== Output Schema ==========
@@ -444,7 +469,7 @@ is_corrupt = (verdict == 'corrupt')
   "verdict": "ok",
   "is_corrupt": false,
   "reasons": ["data URI base64"],
-  "sha256": "b3b5d8…",
+  "sha256": "9fd3b7...c1",
   "byte_length": 123456,
   "base64_length": 164608,
   "details": {
@@ -454,14 +479,16 @@ is_corrupt = (verdict == 'corrupt')
     "has_startxref": true,
     "xref_offset": 120000,
     "xref_target_ok": true,
-    "entries_count": 32,
-    "entries_sample": ["[Content_Types].xml", "word/document.xml"],
-    "ooxml_core_present": true,
-    "header_signature_ok": true,
-    "byte_order": 65534,
-    "sector_shift": 9
+    "entries_count": 0
   },
-  "header_hex_sample": "255044462d312e370a25e2e3cfd30a34…",
+  "header_hex_sample": "255044462d312e37...",
   "used_filename": "resume.pdf",
-  "used_mime_type": "application/pdf"
+  "used_mime_type": "application/pdf",
+  "normalized_base64": "JVBERi0xLjcKJY... (strict, no newlines) ...",
+  "normalized_base64_length": 164608,
+  "normalized_data_uri": "data:application/pdf;base64,JVBERi0xLjcKJY...",
+  "roundtrip_ok": true,
+  "decoded_bytes_available": true,
+  "decoded_bytes_omitted_reason": null,
+  "decoded_bytes": "BINARY_WILL_BE_HERE_IF_ENABLED_AND_SMALL_ENOUGH"
 }
