@@ -1150,7 +1150,7 @@ require 'digest'
                 request_hours = (config['request_hours'] || 48).to_i
 
                 # Calculate thresholds
-                now = Time.now
+                now = Time.now.utc
                 reminder_threshold = now - (reminder_hours * 60 * 60)
                 requested_threshold = now - (request_hours * 60 * 60)
 
@@ -1439,6 +1439,7 @@ require 'digest'
           # Harden against header injection
           name  = call(:sanitize_header, name)  if name
           email = call(:sanitize_header, email)
+          return '' if email.nil? || email.empty? # avoid output "<>" when input ""
 
           if name && !name.empty?
             %(#{call(:rfc2047, name)} <#{email}>)
@@ -1661,8 +1662,8 @@ require 'digest'
               val
             end
         },
-        deserialize_and_coerce: ->(json_str) {
-            fixed = repair_json(json_str)
+        deserialize_and_coerce: ->(json_str, repair: true) {
+            fixed = repair ? repair_json(json_str) : json_str
             raw   = JSON.parse(fixed) rescue []
             raw.map { |obj| obj.transform_values { |v| coerce_type(v) } }
         },
@@ -1674,13 +1675,22 @@ require 'digest'
         safe_time_parse: ->(v) {
             # Return input if input is already a time object
             return v if v.is_a?(Time)
+            
+            # Accept numeric epoch seconds
+            if v.is_a?(Numeric)
+                begin
+                    return Time.at(v).utc
+                rescue
+                    # fall through
+                end
+            end
 
             # Convert to string and strip whitespace
             value_str = v.to_s.strip
             return nil if value_str.empty? # return nil if empty str
 
             begin
-                Time.parse(value_str)
+                Time.parse(value_str)&.utc
             rescue ArgumentError
                 nil # return nil if parsing fails
             end
