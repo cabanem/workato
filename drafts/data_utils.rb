@@ -50,7 +50,7 @@ require 'time'
             }
         },
         date_entries: {
-          fields: ->(_connection, _config_fields) {
+          fields: ->(object_definitions, _connection, _config_fields) {
             [
               {
                 control_type: 'nested_fields',
@@ -59,11 +59,7 @@ require 'time'
                 name: 'date_entries',
                 label: 'Date Entries',
                 hint: 'Add entries or map an array pill here',
-                properties: [
-                  { control_type: 'date',   label: 'Date',  name: 'date',  type: 'date',   optional: false, hint: 'YYYY-MM-DD' },
-                  { control_type: 'number', label: 'Units', name: 'units', type: 'number', optional: true, parse_output: 'float_conversion', hint: '0.1–10; days or hours' },
-                  { control_type: 'text',   label: 'Status',name: 'status',type: 'string', optional: true, hint: 'Approval response text' }
-                ]
+                properties: object_definitions['date_entry_fields']
               }
             ]
           }
@@ -86,7 +82,7 @@ require 'time'
         },
         # Input record schema: add entries as required
         input_record: {
-            fields: ->(_connection, _config_fields) {
+            fields: ->(object_definitions, _connection, _config_fields) {
                 [
                     {
                         control_type: 'nested_fields',   # adds "Add date entry"
@@ -96,33 +92,7 @@ require 'time'
                         label: 'Date Entries',
                         optional: true,
                         hint: 'Add one entry per requested date',
-                        properties: [
-                            {
-                                control_type: 'date',
-                                label: 'Date',
-                                name: 'date',
-                                type: 'date',
-                                optional: false,
-                                hint: 'Requested date in YYYY-MM-DD'
-                            },
-                            {
-                                control_type: 'number',
-                                label: 'Units',
-                                name: 'units',
-                                type: 'number',
-                                optional: true,
-                                parse_output: 'float_conversion',
-                                hint: 'Between 0.1 and 10; days or hours'
-                            },
-                            {
-                                control_type: 'text',
-                                label: 'Status',
-                                name: 'status',
-                                type: 'string',
-                                optional: true,
-                                hint: 'Approval response text'
-                            }
-                        ]
+                        properties: object_definitions['date_entry_fields']
                     }
                 ]
             }
@@ -320,7 +290,7 @@ require 'time'
             }
         },
         table_input: {
-            fields: ->(connection, config_fields) {
+            fields: ->(object_definitions, connection, config_fields) {
                 [
                     {
                         name: 'date_entries',
@@ -332,34 +302,8 @@ require 'time'
                         initially_expanded: true,
                         sticky: true,
                         hint: 'Each entry needs date and units; status is optional.',
-                        properties: [
-                            {
-                                name: 'status',
-                                type: :string,
-                                control_type: 'text',
-                                label: 'Status',
-                                optional: true,
-                                sticky: true
-                            },
-                            {
-                                name: 'units',
-                                type: :number,
-                                control_type: 'number',
-                                label: 'Units',
-                                optional: true,
-                                sticky: true
-                            },
-                            {
-                                name: 'date',
-                                type: :date,
-                                control_type: 'date',
-                                render_input: 'date_conversion',
-                                parse_output: 'date_conversion',
-                                label: 'Date',
-                                optional: true,
-                                sticky: true
-                            }
-                        ]
+                        properties: object_definitions['date_entry_fields']
+                     }
                     }
                 ]
             }
