@@ -658,7 +658,7 @@ require 'time'
             [
               { name: 'Created time', type: :date, control_type: 'date', convert_input: "date_conversion", convert_output: "date_conversion", optional: true, sticky: true },
               { name: 'Last modified time', type: :date, control_type: 'date', convert_input: "date_conversion", convert_output: "date_conversion", optional: true, sticky: true },
-              { name: 'Last get', type: date, control_type: 'date', convert_input: "date_conversion", convert_output: "date_conversion", optional: true, sticky: true}
+              { name: 'Last get', type: :date, control_type: 'date', convert_input: "date_conversion", convert_output: "date_conversion", optional: true, sticky: true}
             ]
           }
         }
@@ -1229,7 +1229,7 @@ require 'time'
               return {
                 "is_expired" => true,
                 "status" => "error",
-                "message" => "Input 'reocrds' was not an array. Received #{records.class}."
+                "message" => "Input 'records' was not an array. Received #{records.class}."
               }
             end
             
@@ -1452,12 +1452,8 @@ require 'time'
           subtitle: 'Construct a raw email message for API use',
           help: 'This action builds a raw RFC 822 compliant email message and encodes it in Base64 URL-safe format. This is commonly required for sending emails via APIs like the Gmail API.',
           display_priority: 10,
-          input_fields: ->(object_definitions) {
-            object_definitions[:email_input_rfc822][:fields].call
-          },
-          output_fields: ->(object_definitions) {
-            object_definitions[:email_output_rfc822][:fields].call
-          },
+          input_fields:  ->(object_definitions) { object_definitions['email_input_rfc822'] },
+          output_fields: ->(object_definitions) { object_definitions['email_output_rfc822'] },
           execute: ->(_connection, input) {
             # --- Main ---
             # 1. Gather Inputs from nested structure
@@ -1478,10 +1474,13 @@ require 'time'
             top << "From: #{call(:normalize_address, from)}" if from
             to_line = call(:join_addresses, to)
             cc_line = call(:join_addresses, cc)
-            bcc_line = call(:join_addresses, bcc) # Note: BCC is for the API, not usually in raw headers
+            bcc_line = call(:join_addresses, bcc) # note: api requires this
+
             top << "To: #{to_line}" unless to_line.empty?
             top << "Cc: #{cc_line}" unless cc_line.empty?
-            top << "Subject: #{call(:rfc2047, subject.to_s)}" if subject
+            top << "Bcc: #{bcc_line}" unless bcc_line.empty?
+
+            top << "Subject: #{call(:rfc2047, call(:sanitize_header, subject.to_s))}" if subject
             rp_line = call(:join_addresses, reply_to)
             top << "Reply-To: #{rp_line}" unless rp_line.empty?
             top << "Date: #{Time.now.rfc2822}"
@@ -1538,6 +1537,11 @@ require 'time'
         },
         
         # --- RFC 822 Email Building Methods ---
+        sanitize_header: ->(s) {
+            # Prevent CRLF/header-injection; trim extraneous whitespace.
+            s.to_s.gsub(/[\r\n]+/, ' ').strip
+        },
+
         b64url: ->(data) {
           # Encodes data into Base64 URL-safe format.
           Base64.strict_encode64(data).tr('+/', '-_').gsub(/=+\z/, '')
@@ -1568,6 +1572,11 @@ require 'time'
               email = s
             end
           end
+
+          # Harden against header injection
+          name  = call(:sanitize_header, name)  if name
+          email = call(:sanitize_header, email)
+
           if name && !name.empty?
             %(#{call(:rfc2047, name)} <#{email}>)
           else
@@ -1700,7 +1709,7 @@ require 'time'
         deserialize_and_coerce: ->(json_str) {
             fixed = repair_json(json_str)
             raw   = JSON.parse(fixed) rescue []
-            raw.map { |obj| obj.transform_values { |v| coerce_value(v) } }
+            raw.map { |obj| obj.transform_values { |v| coerce_type(v) } }
         },
 
         # Safely parse and format dates and times
