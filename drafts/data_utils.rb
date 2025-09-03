@@ -562,7 +562,7 @@ require 'time'
             }
         },
         email_input_custom_fields: {
-            fields: ->(connection) {
+            fields: ->(_connection) {
                 [
                     name: 'email_content',
                     type: :object,
@@ -570,10 +570,10 @@ require 'time'
                     label: 'Email Content',
                     optional: false,
                     properties: [
-                        { name: 'custom_greeting', type: :string, control_type: 'select', label: 'Custom Greeting', optional: true, sticky: true, group: 'Email Content' },
-                        { name: 'custom_body', type: :string, control_type: 'text-area', label: 'Custom Message Body', optional: false, sticky: true, group: 'Email Content' },
-                        { name: 'custom_signoff', type: :string, control_type: 'select', label: 'Custom Signoff', optional: true, sticky: true, group: 'Email Content' },
-                        { name: 'custom_sender_name', type: :string, control_type: 'select', label: 'Custom Sender Name', ooptional: true, sticky: true, group: 'Email Content' }
+                        { name: 'custom_greeting',      type: :string, control_type: 'select',      label: 'Custom Greeting',       optional: true,     sticky: true, group: 'Email Content' },
+                        { name: 'custom_body',          type: :string, control_type: 'text-area',   label: 'Custom Message Body',   optional: false,    sticky: true, group: 'Email Content' },
+                        { name: 'custom_signoff',       type: :string, control_type: 'select',      label: 'Custom Signoff',        optional: true,     sticky: true, group: 'Email Content' },
+                        { name: 'custom_sender_name',   type: :string, control_type: 'select',      label: 'Custom Sender Name',    optional: true,     sticky: true, group: 'Email Content' }
                     ]
                 ]
             }
