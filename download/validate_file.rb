@@ -1,27 +1,37 @@
 # Detect encoding (binary vs base64), infer file type (pdf/docx/doc/zip/etc),
-# and run lightweight integrity checks. Returns a verdict and diagnostics.
+# run lightweight integrity checks, and return BOTH normalized strict base64
+# and (optionally) raw decoded bytes for resending.
 #
 # Inputs (configure these in the Ruby Snippet's Input section):
-# - file_content (String)        : REQUIRED. The content bytes or a base64 string.
-# - file_name    (String, opt)   : Optional filename; used for hints only.
-# - mime_type    (String, opt)   : Optional MIME hint; not required.
-# - encoding_hint(String, opt)   : 'auto' (default), 'binary', or 'base64'
-# - expected_sha256 (String, opt): Optional SHA-256 to compare against decoded bytes.
+# - file_content      (String, REQUIRED): the content bytes OR a base64 string (may be data URI).
+# - file_name         (String, optional): filename hint.
+# - mime_type         (String, optional): MIME hint.
+# - encoding_hint     (String, optional): 'auto' (default), 'binary', or 'base64'.
+# - expected_sha256   (String, optional): if provided, compare against decoded bytes.
+# - emit_raw_bytes    (String/Boolean, optional): 'true'|'false' (default 'false').
+# - raw_bytes_max     (Integer, optional): max bytes to expose in 'decoded_bytes' (default 5_242_880).
 #
-# Outputs (declare via Output schema; see example JSON after this block):
-# - content_encoding_detected   : 'binary' or 'base64'
-# - container_detected          : 'pdf'|'zip'|'ole'|'text'|'unknown'
-# - file_kind                   : 'pdf'|'docx'|'xlsx'|'pptx'|'doc'|'zip-other'|'unknown'
-# - verdict                     : 'ok'|'suspect'|'corrupt'
-# - is_corrupt                  : true/false  (true if verdict == 'corrupt')
-# - reasons                     : [String]    (why the verdict)
-# - sha256                      : hex digest of decoded bytes
-# - byte_length                 : Integer     (decoded length)
-# - base64_length               : Integer or nil (if input looked like base64)
-# - details                     : Hash        (type-specific checks)
-# - header_hex_sample           : String      (first 32 bytes hex, for logs)
-# - used_filename               : String or nil
-# - used_mime_type              : String or nil
+# Outputs (declare via Output schema; sample provided after code):
+# - content_encoding_detected : 'binary'|'base64'
+# - container_detected        : 'pdf'|'zip'|'ole'|'text'|'unknown'
+# - file_kind                 : 'pdf'|'docx'|'xlsx'|'pptx'|'doc'|'zip-other'|'unknown'
+# - verdict                   : 'ok'|'suspect'|'corrupt'
+# - is_corrupt                : true|false
+# - reasons                   : [String]
+# - sha256                    : hex SHA-256 of decoded bytes
+# - byte_length               : Integer (decoded length)
+# - base64_length             : Integer or nil (length of input base64 if applicable)
+# - details                   : Hash (type-specific diagnostics)
+# - header_hex_sample         : String (first 32 bytes hex)
+# - used_filename             : String or nil
+# - used_mime_type            : String or nil
+# - normalized_base64         : String (strict base64, no line breaks)  << for resending
+# - normalized_base64_length  : Integer
+# - normalized_data_uri       : String (data:...;base64,...) convenience form
+# - roundtrip_ok              : Boolean (strict_decode64(normalized_base64) == decoded bytes)
+# - decoded_bytes_available   : Boolean (did we include raw bytes?)
+# - decoded_bytes_omitted_reason : String or nil
+# - decoded_bytes             : String or nil (raw bytes; only if allowed by size/settings)
 
 require 'base64'
 require 'digest'
