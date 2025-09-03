@@ -609,7 +609,7 @@ require 'time'
                                 label: 'Link to Error Details',
                                 type: :string, 
                                 control_type: 'url',
-                                optional: true,
+                               optional: true,
                                 sticky: true 
                             }
                         ]
@@ -1188,11 +1188,12 @@ require 'time'
               { name: 'message', type: :string, label: 'Message', hint: 'A descriptive message about the validation result.' }
             ]
           },
-          execute: ->(_connection, input_fields, config_fields) {
+          execute: ->(_connection, input) {
             # 1. Get input and configuration
-            records = input_fields['records']
-            freshness_days = (config_fields['freshness_days'] || 180).to_i
-            date_field = config_fields['date_field_name'] || 'last_verified'
+            records        = input['records']
+            freshness_days = (input['freshness_days'] || 180).to_i
+            date_field     = input['date_field_name'] || 'last_verified'
+             
             
             # 2. Validate that records is an array
             unless records.is_a?(Array)
@@ -1204,7 +1205,7 @@ require 'time'
             end
             
             # 3. Calculate expiration threshold
-            expiration_threshold = Time.now - (freshness_days * 24 * 60 * 60)
+            expiration_threshold = Time.now.utc - (freshness_days * 24 * 60 * 60)
             
             # 4. Use 'any?' to find first expired record (early exit)
             any_expired = records.any? do |record|
