@@ -1825,10 +1825,10 @@ require 'time'
             type_matches = field_value.present? && field_value.to_s.downcase.include?(substring_value.to_s.downcase)
 
             # 3. Evaluate reminder time condition (only if reminder_field is present)
-            reminder_is_valid = reminder_field.blank? || reminder_time.nil? || reminder_time <= reminder_boundary
+            reminder_is_valid = !call(:present?, reminder_field) || reminder_time.nil? || reminder_time <= reminder_boundary
 
             # 4. Evaluate requested time condition (only if request_field is present)
-            requested_is_valid = request_field.blank? || requested_time.nil? || requested_time <= requested_boundary
+            requested_is_valid = !call(:present?, request_field) || requested_time.nil? || requested_time <= requested_boundary
 
             # 5. Return true only if all conditions are met
             type_matches && reminder_is_valid && requested_is_valid
