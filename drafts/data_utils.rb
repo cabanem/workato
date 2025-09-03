@@ -848,134 +848,51 @@ require 'time'
                     }
                 end
             },
-            output_fields: ->(object_definitions, connection, config_fields) {
-                # Dynamic output fields based on config_fields
+            output_fields: ->(object_definitions, _connection, config_fields) {
                 format = (config_fields['output_format'] || 'both').to_s
-                max_entries_for_flat = (config_fields['max_flat_entries'] || 10).to_i
-
-                output_fields = [
-                    {
-                        control_type: 'text',
-                        type: 'string',
-                        name: 'serialized_entries',
-                        label: 'Serialized Entries JSON',
-                    },
+                max    = (config_fields['max_flat_entries'] || 10).to_i
+                [ 
+                    { control_type: 'text', type: 'string', name: 'serialized_entries', label: 'Serialized Entries JSON' },
+                    *call(:output_fields_for_format, object_definitions, format, max),
+                    { name: 'total_requested_units', label: 'Total Requested Units', type: 'number', optional: true, hint: 'Sum of all valid units requested' }
                 ]
-
-                # Nested array output
-                if format == 'nested_array' || format == 'both'
-                    output_fields << {
-                        control_type: 'nested_fields',
-                        type: 'array',
-                        of: 'object',
-                        name: 'date_entries',
-                        label: 'Date Entries (Nested Array)',
-                        properties: object_definitions['date_entry_fields']
-                    }
-                end
-
-                # List outputs
-                if format == 'lists' || format == 'both'
-                    output_fields += [
-                        { name: 'dates',    label: 'Dates (List)',    type: 'array', of: 'date',   hint: 'All entry dates' },
-                        { name: 'units',    label: 'Units (List)',    type: 'array', of: 'number', hint: 'All entry units' },
-                        { name: 'statuses', label: 'Statuses (List)', type: 'array', of: 'string', hint: 'All entry statuses' }
-                    ]
-                end
-
-                # Flat output fields
-                if format == 'flat_fields' || format == 'both'
-                    (1..max_entries_for_flat).each do |i|
-                        output_fields += [
-                            { name: "entry_#{i}_date",   label: "Entry #{i} Date",   type: 'date',   optional: true },
-                            { name: "entry_#{i}_units",  label: "Entry #{i} Units",  type: 'number', optional: true },
-                            { name: "entry_#{i}_status", label: "Entry #{i} Status", type: 'string', optional: true }
-                        ]
-                    end
-                end
-              
-                output_fields << {
-                    name: 'total_requested_units',
-                    label: 'Total Requested Units',
-                    type: 'number',
-                    optional: true,
-                    hint: 'Sum of all valid units requested'
-                }
-                output_fields
             },
-            execute: ->(connection, input) {
-                num_entries_to_process = (input['num_entries'] || 0).to_i
-                output_format_pref = (input['output_format'] || 'both').to_s
-                max_flat_output_entries = (input['max_flat_entries'] || 10).to_i
+            execute: ->(_connection, input) {
+                num     = (input['num_entries'] || 0).to_i
+                format  = (input['output_format'] || 'both').to_s
+                max     = (input['max_flat_entries'] || 10).to_i
 
                 # 1) Build the array
-                raw_entries = call(:build_entries, input, num_entries_to_process)
+                raw = call(:build_entries, input, num)
 
-                # 2) Convert types
-                converted_entries = raw_entries.map.with_index(1) do |e, idx|
-                    new_entry = {}
-                    # Date parsing
-                    if e['date'].present?
-                        begin
-                            new_entry['date'] = Date.parse(e['date'].to_s)
-                        rescue ArgumentError
-                            # Handle invalid date -- nil
-                            # raise "Entry #{idx}: invalid date #{e['date'].inspect}"
-                            new_entry['date'] = nil
-                        end
-                    else
-                        new_entry['date'] = nil
-                    end
-
-                    # Units conversion
-                    if e['units'].present?
-                        begin
-                            new_entry['units'] = Float(e['units'])
-                        rescue ArgumentError
-                            #raise "Entry #{idx}: invalid units #{e['units'].inspect}"
-                            new_entry['units'] = nil
-                        end
-                    else
-                        new_entry['units'] = nil
-                    end
-                    new_entry['status'] = e['status']&.to_s # Ensure status is a string
-
-                    new_entry.compact # Remove nil values if date/units were invalid
-                end.select { |e| e['date'].present? && e['units'].present? } # Filter out entries that became invalid
-              
-                total_requested_units = converted_entries.sum { |entry| entry['units'] || 0.0 }
+                # 2) Normalize (lenient)
+                entries = call(:normalize_entries, raw, strict: false)
 
                 # 3) Serialize the array into JSON
-                serialized = call(:serialize_entries, converted_entries)
+                total = entries.sum { |e| e['units'] || 0.0 }
+                serialized = call(:serialize_entries, entries)
 
                 # 4) Prepare the output hash
-                output = {
-                    'serialized_entries' => serialized,
-                    'total_requested_units' => total_requested_units
-                }
+                out = { 'serialized_entries' => serialized, 'total_requested_units' => total }
 
-                # Add outputs based on the chosen format preference
-                if output_format_pref == 'nested_array' || output_format_pref == 'both'
-                    output['date_entries'] = converted_entries
+                if %w[nested_array both].include?(format)
+                    out['date_entries'] = entries
                 end
-
-                if output_format_pref == 'lists' || output_format_pref == 'both'
-                    output['dates']    = converted_entries.map { |e| e['date'] }.compact
-                    output['units']    = converted_entries.map { |e| e['units'] }.compact
-                    output['statuses'] = converted_entries.map { |e| e['status'] }.compact
+                if %w[lists both].include?(format)
+                    out['dates']    = entries.map { |e| e['date'] }
+                    out['units']    = entries.map { |e| e['units'] }
+                    out['statuses'] = entries.map { |e| e['status'] }.compact
                 end
-
-                if output_format_pref == 'flat_fields' || output_format_pref == 'both'
-                    converted_entries.each_with_index do |entry, idx|
-                        break if idx >= max_flat_output_entries
+                if %w[flat_fields both].include?(format)
+                    entries.first(max).each_with_index do |entry, idx|
                         i = idx + 1
-                        output["entry_#{i}_date"]   = entry['date']   if entry['date']
-                        output["entry_#{i}_units"]  = entry['units']  if entry['units']
-                        output["entry_#{i}_status"] = entry['status'] if entry['status']
+                        out["entry_#{i}_date"]   = entry['date']
+                        out["entry_#{i}_units"]  = entry['units']
+                        out["entry_#{i}_status"] = entry['status'] if entry['status']
                     end
                 end
 
-                output
+                out
             }
         },
         transform_flatten_json_date_entries: {
@@ -1035,50 +952,15 @@ require 'time'
                     }
                 ]
             },
-            output_fields: ->(object_definitions, connection, config_fields) {
+            output_fields: ->(object_definitions, _connection, config_fields) {
                 format = (config_fields['output_format'] || 'both').to_s
-                max_entries = (config_fields['max_flat_entries'] || 10).to_i
-                
-                output_fields = []
-                
-                # Add fields based on requested format
-                if format == 'nested_array' || format == 'both'
-                    output_fields << {
-                        control_type: 'nested_fields',
-                        type: 'array',
-                        of: 'object',
-                        name: 'date_entries',
-                        label: 'Date Entries',
-                        properties: object_definitions['date_entry_fields']
-                    }
-                end
-                
-                # Add list outputs (dates[], units[], statuses[])
-                if format == 'lists' || format == 'both'
-                    output_fields += [
-                        { name: 'dates',    label: 'Dates',    type: 'array', of: 'date',   hint: 'All entry dates' },
-                        { name: 'units',    label: 'Units',    type: 'array', of: 'number', hint: 'All entry units' },
-                        { name: 'statuses', label: 'Statuses', type: 'array', of: 'string', hint: 'All entry statuses' }
-                    ]
-                end
-                
-                # Add flat field outputs (entry_1_date, entry_1_units, etc.)
-                if format == 'flat_fields' || format == 'both'
-                    (1..max_entries).each do |i|
-                        output_fields += [
-                            { name: "entry_#{i}_date",   label: "Entry #{i} Date",   type: 'date',   optional: true },
-                            { name: "entry_#{i}_units",  label: "Entry #{i} Units",  type: 'number', optional: true },
-                            { name: "entry_#{i}_status", label: "Entry #{i} Status", type: 'string', optional: true }
-                        ]
-                    end
-                end
-                
-                output_fields
+                max    = (config_fields['max_flat_entries'] || 10).to_i
+                call(:output_fields_for_format, object_definitions, format, max)
             },
             execute: ->(_connection, input) {
-                format = (input['output_format'] || 'both').to_s
-                max_entries = (input['max_flat_entries'] || 10).to_i
-                raw = input['serialized_entries']
+                format  = (input['output_format'] || 'both').to_s
+                max     = (input['max_flat_entries'] || 10).to_i
+                raw     = input['serialized_entries']
               
                 # 1) Normalize into array of hashes
                 parsed = case raw
@@ -1088,57 +970,32 @@ require 'time'
                     rescue JSON::ParserError => e
                         raise "Invalid JSON for date entries: #{e.message}"
                     end
-                when Array
-                    raw
+                when Array then raw
                 else
                     raise "Expected String or Array for serialized_entries, got #{raw.class}"
                 end
-        
+
                 # 2) Convert types (Str->Date, Str/Num->Float)
-                converted = parsed.map.with_index(1) do |e, idx|
-                    {
-                        'date'   => begin
-                                        Date.parse(e['date'].to_s)
-                                    rescue
-                                        raise "Entry #{idx}: invalid date #{e['date'].inspect}"
-                                    end,
-                        'units'  => begin
-                                        Float(e['units'])
-                                    rescue
-                                        raise "Entry #{idx}: invalid units #{e['units'].inspect}"
-                                    end,
-                        'status' => e['status'].to_s
-                    }
+                entries = call(:normalize_entries, parsed, strict: true)
+
+                out = {}
+                if %w[nested_array both].include?(format)
+                    out['date_entries'] = entries
                 end
-                
-                # Initialize output hash
-                output = {}
-                
-                # Add output based on requested format
-                if format == 'nested_array' || format == 'both'
-                    output['date_entries'] = converted
+                if %w[lists both].include?(format)
+                    out['dates']    = entries.map { |e| e['date'] }
+                    out['units']    = entires.map { |e| e['units'] }
+                    out['statuses'] = entries.map { |e| e['status'] }
                 end
-                
-                # Add list outputs (dates[], units[], statuses[])
-                if format == 'lists' || format == 'both'
-                    output['dates']    = converted.map { |e| e['date'] }
-                    output['units']    = converted.map { |e| e['units'] }
-                    output['statuses'] = converted.map { |e| e['status'] }
-                end
-                
-                # Add flat field outputs (entry_1_date, entry_1_units, etc.)
-                if format == 'flat_fields' || format == 'both'
-                    converted.each_with_index do |entry, idx|
-                        break if idx >= max_entries
-                        
+                if %w[flat_fields both].include?(format)
+                    entries.first(max).each_with_index do |entry, idx|
                         i = idx + 1
-                        output["entry_#{i}_date"]   = entry['date']
-                        output["entry_#{i}_units"]  = entry['units']
-                        output["entry_#{i}_status"] = entry['status']
+                        out["entry_#{i}_date"]      = entry['date']
+                        out["entry_#{i}_units"]     = entry['units']
+                        out["entry_#{i}_status"]    = entry['status']
                     end
                 end
-                
-                output
+                out
             }
         },
         # Filtering
@@ -1554,7 +1411,6 @@ require 'time'
             # Prevent CRLF/header-injection; trim extraneous whitespace.
             s.to_s.gsub(/[\r\n]+/, ' ').strip
         },
-
         b64url: ->(data) {
           # Encodes data into Base64 URL-safe format.
           Base64.strict_encode64(data).tr('+/', '-_').gsub(/=+\z/, '')
@@ -1704,6 +1560,29 @@ require 'time'
             end
             entries
         },
+        normalize_entries: ->(entries, strict: false) {
+            Array(entries).each_with_index.map do |e, idx|
+                date = begin
+                    v = e['date']
+                    v.nil? ? nil : Date.parse(v.to_s)
+                rescue
+                    raise "Entry #{idx + 1}: invalid date #{e['date'].inspect}" if strict
+                    nil
+                end
+                units = begin
+                    v = e['units']
+                    v.nil? ? nil : Float(v)
+                rescue
+                    raise "Entry #{idx + 1}: invalid units #{e['units'].inspect}" if strict
+                    nil
+                end
+                h = {}
+                h['date'] = date if date
+                h['units'] = units if units
+                h['status'] = e['status']&.to_s if e.key?('status') && e['status']
+                h
+            end.reject { |h| h['date'].nil? || h['units'].nil? }
+        },
 
         # JSON
         serialize_entries: ->(entries) {
@@ -1811,6 +1690,36 @@ require 'time'
             rescue ArgumentError
                 nil # return nil if parsing fails
             end
+        },
+        output_fields_for_format: ->(object_definitions, format, max_flat) {
+            fields = []
+            if %w[nested_array both].include?(format)
+                fields << {
+                    control_type: 'nested_fields',
+                    type: 'array',
+                    of: 'object',
+                    name: 'date_entries',
+                    label: 'Date Entries',
+                    properties: object_definitions['date_entry_fields']
+                }
+            end
+            if %w[lists both].include?(format)
+                fields += [
+                    { name: 'dates', label: 'Date', type: 'array', of: 'date' },
+                    { name: 'units',    label: 'Units',    type: 'array', of: 'number' },
+                    { name: 'statuses', label: 'Statuses', type: 'array', of: 'string' }
+                ]
+            end
+            if %w[flat_fields both].include?(format)
+                (1..max_flat).each do |i|
+                    fields += [
+                        { name: "entry_#{i}_date",   label: "Entry #{i} Date",   type: 'date'   },
+                        { name: "entry_#{i}_units",  label: "Entry #{i} Units",  type: 'number' },
+                        { name: "entry_#{i}_status", label: "Entry #{i} Status", type: 'string' }
+                    ]
+                end
+            end
+            fields
         },
         extract_num_days: ->(data) {},
 
