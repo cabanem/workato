@@ -121,6 +121,7 @@
     end,
 
     normalize_message: lambda do |msg|
+      #::TODO:: #1 + safer web_link and messsage-id canonicalization 
       headers = call('headers_to_hash', msg.dig('payload', 'headers'))
       bodies  = call('extract_bodies', msg['payload'])
       {
@@ -137,15 +138,25 @@
         cc: headers['Cc'],
         bcc: headers['Bcc'],
         date: headers['Date'],
-        message_id_header: headers['Message-Id'],
+        message_id_header: headers['Message-ID'],
         # Deep link directly to message
-        web_link: (headers['Message-Id'].present? ? "https://mail.google.com/mail/u/0/#search/rfc822msgid%3A#{CGI.escape(headers['Message-Id'])}" : nil),
+        web_link: (headers['Message-ID'].present? ? "https://mail.google.com/mail/u/0/#search/rfc822msgid%3A#{CGI.escape(headers['Message-ID'])}" : nil),
         body_text: bodies[:text],
         body_html: bodies[:html],
         payload: msg['payload']
       }
     end,
 
+    header_value_ci: ->(headers_array, *names) {
+      idx = {}
+      Array(headers_array).each { |h| idx[h['name'].to_s.downcase]=h['value'] }
+      names.map { |n| idx[n.to_s.downcase] }.compact.first
+    },
+
+    strip_mid_brackets: lambda do |mid|
+      mid.to_s.strip.gsub(/\A<|>\z/, '')
+    end,
+    
     # === MIME builders ===
     join_addr: lambda do |val|
       case val
@@ -162,6 +173,10 @@
     end,
 
     # Encode data URL or base64 or plain string to base64 (standard) for attachments
+    needs_base64: lambda do |s|
+      s.to_s.each_byte.any? { |b| b > 127 }
+    end,
+
     to_b64: lambda do |content|
       str =
         if content.is_a?(String) && content.start_with?('data:')
@@ -198,6 +213,24 @@
 
     boundary: lambda do
       "----workato-#{(Time.now.to_f * 1000).to_i}-#{rand(36**8).to_s(36)}"
+    end,
+
+    safe_fetch_bytes: lambda do |url, max_bytes = 10 * 1024 * 1024|
+      uri = URI.parse(url) rescue nil
+      return nil unless uri && %w[http https].include?(uri.scheme)
+
+      # HEAD for size, if server supports
+      hdrs = head(url).headers rescue {}
+      len = hdrs['Content-Length'].to_i
+      if len > 0 && len > max_bytes
+        error("Attachment too large (#{len} bytes), max #{max_bytes}.")
+      end
+
+      resp = get(url).response_format_raw
+      if resp&.body && resp.body.bytesize > max_bytes
+        error("Attachment too large after download (#{resp.body.bytesize} bytes).")
+      end
+      resp
     end,
 
     fetch_attachment_bytes: lambda do |url|
@@ -319,10 +352,10 @@
 
       # Fetch only headers to reduce payload
       original = get("me/messages/#{original_message_id}")
-                  .params(format: 'metadata', metadataHeaders: ['Subject', 'Message-Id', 'References'])
+                  .params(format: 'metadata', metadataHeaders: ['Subject', 'Message-ID', 'References'])
       hdrs = call('headers_to_hash', original.dig('payload', 'headers'))
       thread_id = original['threadId']
-      msg_id    = hdrs['Message-Id']
+      msg_id    = hdrs['Message-ID']
       refs      = (hdrs['References'].to_s.split(/\s+/) + [msg_id]).compact.uniq
       subj      = provided_subject.presence || call('ensure_re', hdrs['Subject'].to_s)
       { thread_id: thread_id, in_reply_to: msg_id, references: refs, subject: subj }
@@ -433,7 +466,7 @@
         message_id_header: "<#{id}@mock.local>",
         body_text: "Hello from mock message ##{idx}.\nThis is test content.",
         body_html: "<p>Hello from <strong>mock</strong> message ##{idx}.</p>",
-        payload: { mimeType: 'multipart/alternative', headers: [ { name: 'Subject', value: subj }, { name: 'Message-Id', value: "<#{id}@mock.local>" } ] }
+        payload: { mimeType: 'multipart/alternative', headers: [ { name: 'Subject', value: subj }, { name: 'Message-ID', value: "<#{id}@mock.local>" } ] }
       }
     end,
 
@@ -543,6 +576,11 @@
       else
         get('me/labels')['labels']&.map { |l| [l['name'], l['id']] } || []
       end
+    end,
+
+    send_as: lambda do |connection|
+      return [] if (connection['auth_type'] || 'gmail_oauth2') == 'mock'
+      get('me/settings/sendAs')['sendAs']&.map { |s| ["#{s['displayName']} <#{s['sendAsEmail']}>", s['sendAsEmail']] } || []
     end
   },
 
@@ -573,7 +611,7 @@
       subtitle: 'users.messages.list',
       input_fields: -> {
         [
-          { name: 'q', label: "Query", hint: 'Gmail search, e.g., from:alice newer_than:7d has:attachment', optional: true, label: "Query"  },
+          { name: 'q', label: "Query", hint: 'Gmail search, e.g., from:alice newer_than:7d has:attachment', optional: true },
           { name: 'from', label: "From", hint: 'From email (exact or partial)', optional: true },
           { name: 'to',      hint: 'To email (exact or partial)', optional: true },
           { name: 'subject', hint: 'Subject contains', optional: true },
@@ -636,13 +674,13 @@
     modify_message_labels: {
       title: 'Modify message labels',
       subtitle: 'users.messages.modify',
-      help: ->(connection {
+      help: ->(connection) {
         msg = 'Requires scope `gmail.modify` (or `mail.google.com`).'
-        unless connection['enabled_modify']
+        unless connection['enable_modify']
           msg += 'This connection does not have `gmail.modify` enabled.'
         end
         msg
-      }),
+      },
       input_fields: -> {
         [
           { name: 'message_id', optional: false },
