@@ -107,13 +107,6 @@ require 'digest'
             ]
           }
         },
-        entry_fields: {
-            fields: ->(_connection, _config_fields) {
-                [
-                    { name: 'fake_field', type: :string, optional: true }
-                ]
-            }
-        },
         generic_input: {
             fields: ->(_connection, _config_fields) {
                 [
