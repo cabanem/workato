@@ -374,97 +374,117 @@ require 'time'
         },
         email_input_rfc822: {
             fields: -> (object_definitions, _connection) {
-              [
-                {
-                  name: 'sender_details',
-                  type: :object,
-                  control_type: 'form',
-                  label: 'Sender Details',
-                  properties: [
-                    { 
-                      name: 'from', 
-                      type: 'string', 
-                      control_type: 'text', 
-                      label: 'From', 
-                      hint: 'Sender email address. E.g., "Sender Name <sender@example.com>" or just sender@example.com.', 
-                      optional: false 
-                    }
-                  ]
-                },
-                {
-                  name: 'recipient_details',
-                  type: :object,
-                  control_type: 'form',
-                  label: 'Recipient Details',
-                  properties: [
-                    { 
-                              name: 'to', 
-                              type: 'array', 
-                              of: 'string', 
-                              control_type: 'text', 
-                              label: 'To', 
-                              hint: 'Recipient email address(es). Use a list pill or comma-separated values.', 
-                              optional: false 
-                            },
-                    { 
-                              name: 'cc', 
-                              type: 'array', 
-                              of: 'string', 
-                              control_type: 'text', 
-                              label: 'Cc', 
-                              optional: true, 
-                              hint: 'CC recipient email address(es).' 
-                            },
-                    { 
-                              name: 'bcc', 
-                              type: 'array', 
-                              of: 'string', 
-                              control_type: 'text', 
-                              label: 'Bcc', 
-                              optional: true, 
-                              hint: 'BCC recipient email address(es).' 
-                            },
-                    { 
-                              name: 'reply_to', 
-                              type: 'array', 
-                              of: 'string', 
-                              control_type: 'text', 
-                              label: 'Reply-To', 
-                              optional: true, 
-                              hint: 'Reply-To email address(es).' 
+                [
+                    {
+                        name: 'sender_details',
+                        type: :object,
+                        control_type: 'form',
+                        label: 'Sender Details',
+                        properties: [
+                            {
+                                name: 'from',
+                                type: 'string',
+                                control_type: 'text',
+                                label: 'From',
+                                hint: 'Sender email address. E.g., "Sender Name <sender@example.com>" or just sender@example.com.',
+                                optional: false
                             }
-                  ]
-                },
-                {
-                  name: 'email_content',
-                  type: :object,
-                  control_type: 'form',
-                  label: 'Email Content',
-                  properties: [
-                            { 
-                              name: 'subject', 
-                              type: 'string', 
-                              control_type: 'text', 
-                              label: 'Subject', 
-                              optional: false },
-                            { 
-                              name: 'text_body',
-                              type: 'string',
-                              control_type: 'text-area', 
-                              label: 'Text Body', 
-                              optional: true, 
-                              hint: 'Plain text version of the email body.'
-                            },
-                            { 
-                              name: 'html_body', 
-                              type: 'string', 
-                              control_type: 'text-area', 
-                              label: 'HTML Body', 
-                              optional: true, 
-                              hint: 'HTML version of the email body.' }
                         ]
-                }
-              ]
+                    },
+                    {
+                        name: 'recipient_details',
+                        type: :object,
+                        control_type: 'form',
+                        label: 'Recipient Details',
+                        properties: [
+                        {
+                            name: 'to',
+                            type: 'array',
+                            of: 'string',
+                            control_type: 'text',
+                            label: 'To',
+                            hint: 'Recipient email address(es). Use a list pill or comma-separated values.',
+                            optional: false
+                        },
+                        {
+                            name: 'cc',
+                            type: 'array',
+                            of: 'string',
+                            control_type: 'text',
+                            label: 'Cc',
+                            optional: true,
+                            hint: 'CC recipient email address(es).'
+                        },
+                        {
+                            name: 'bcc',
+                            type: 'array',
+                            of: 'string',
+                            control_type: 'text',
+                            label: 'Bcc',
+                            optional: true,
+                            hint: 'BCC recipient email address(es).'
+                        },
+                        {
+                            name: 'reply_to',
+                            type: 'array',
+                            of: 'string',
+                            control_type: 'text',
+                            label: 'Reply-To',
+                            optional: true,
+                            hint: 'Reply-To email address(es).'
+                        }
+                        ]
+                    },
+                    {
+                        name: 'email_content',
+                        type: :object,
+                        control_type: 'form',
+                        label: 'Email Content',
+                        properties: [
+                        {
+                            name: 'subject',
+                            type: 'string',
+                            control_type: 'text',
+                            label: 'Subject',
+                            optional: false
+                        },
+                        {
+                            name: 'text_body',
+                            type: 'string',
+                            control_type: 'text-area',
+                            label: 'Text Body',
+                            optional: true,
+                            hint: 'Plain text version of the email body.'
+                        },
+                        {
+                            name: 'html_body',
+                            type: 'string',
+                            control_type: 'text-area',
+                            label: 'HTML Body',
+                            optional: true,
+                            hint: 'HTML version of the email body.'
+                        }
+                        ]
+                    },
+                    {
+                        name: 'attachments',
+                        label: 'Attachments',
+                        type: :array,
+                        of: :object,
+                        control_type: 'nested_fields',
+                        initially_expanded: false,
+                        optional: true,
+                        hint: 'Add one object per file. Prefer passing base64 content for binary files.',
+                        properties: [
+                        { name: 'filename',        type: 'string', control_type: 'text',       label: 'Filename',         optional: false, hint: 'e.g., report.pdf' },
+                        { name: 'mime_type',       type: 'string', control_type: 'text',       label: 'MIME Type',        optional: true,  hint: 'Optional. Auto-detected from filename if omitted.' },
+                        { name: 'content_base64',  type: 'string', control_type: 'text-area',  label: 'Content (Base64)', optional: true,  hint: 'Base64-encoded file content (recommended).' },
+                        { name: 'content',         type: 'string', control_type: 'text-area',  label: 'Content (Raw)',    optional: true,  hint: 'Raw text content for small text files. Ignored if Base64 is present.' },
+                        { name: 'disposition',     type: 'string', control_type: 'text',       label: 'Disposition',      optional: true,  hint: 'attachment (default) or inline' },
+                        { name: 'content_id',      type: 'string', control_type: 'text',       label: 'Content-ID',       optional: true,  hint: 'If disposition=inline, reference as cid:VALUE inside HTML.' }
+                        ]
+                    }
+                ]
             }
         },
         email_output_rfc822: {
@@ -1455,7 +1475,7 @@ require 'time'
           input_fields:  ->(object_definitions) { object_definitions['email_input_rfc822'] },
           output_fields: ->(object_definitions) { object_definitions['email_output_rfc822'] },
           execute: ->(_connection, input) {
-            # --- Main ---
+            # ------- Main -------
             # 1. Gather Inputs from nested structure
             from      = input.dig('sender_details', 'from')
             to        = input.dig('recipient_details', 'to')
@@ -1465,61 +1485,103 @@ require 'time'
             subject   = input.dig('email_content', 'subject')
             text_body = input.dig('email_content', 'text_body')
             html_body = input.dig('email_content', 'html_body')
+            atts      = input['attachments'] || []
 
             has_text = text_body && !text_body.to_s.empty?
             has_html = html_body && !html_body.to_s.empty?
 
+            # Consider attachments "present" only if they have filename and some content
+            has_atts = Array(atts).any? do |a|
+                a.is_a?(Hash) &&
+                (a['filename'] || a[:filename]).to_s.strip != '' &&
+                (
+                    (a['content_base64'] || a[:content_base64]).to_s.strip != '' ||
+                    (a['content']        || a[:content]).to_s.strip        != ''
+                )
+            end
+
             # 2. Build Message Headers
             top = []
             top << "From: #{call(:normalize_address, from)}" if from
-            to_line = call(:join_addresses, to)
-            cc_line = call(:join_addresses, cc)
+            to_line  = call(:join_addresses, to)
+            cc_line  = call(:join_addresses, cc)
             bcc_line = call(:join_addresses, bcc) # note: api requires this
 
-            top << "To: #{to_line}" unless to_line.empty?
-            top << "Cc: #{cc_line}" unless cc_line.empty?
-            top << "Bcc: #{bcc_line}" unless bcc_line.empty?
-
+            top << "To: #{to_line}"       unless to_line.empty?
+            top << "Cc: #{cc_line}"       unless cc_line.empty?
+            top << "Bcc: #{bcc_line}"     unless bcc_line.empty?
             top << "Subject: #{call(:rfc2047, call(:sanitize_header, subject.to_s))}" if subject
             rp_line = call(:join_addresses, reply_to)
             top << "Reply-To: #{rp_line}" unless rp_line.empty?
-            top << "Date: #{Time.now.rfc2822}"
+            top << "Date: #{Time.now.utc.rfc2822}"
             top << "Message-ID: <#{SecureRandom.uuid}@workato>"
 
             # 3. Build Message Body
             crlf = "\r\n"
             body = nil
-            if has_text && has_html
-                # Both text and HTML bodies are present, create a multipart/alternative message.
-                alt_boundary = call(:random_boundary, 'alt')
+
+            if has_atts
+                # Top-level multipart/mixed
+                mixed_boundary = call(:random_boundary, 'mixed')
                 top << "MIME-Version: 1.0"
-                top << "Content-Type: multipart/alternative; boundary=\"#{alt_boundary}\""
-                parts = [call(:part_text, text_body, 'plain'), call(:part_text, html_body, 'html')]
-                body = call(:multipart_body, alt_boundary, parts)
-            elsif has_html
-                # Only HTML body is present.
-                top << "MIME-Version: 1.0"
-                top << "Content-Type: text/html; charset=UTF-8"
-                top << "Content-Transfer-Encoding: base64"
-                body = call(:b64wrap, html_body.to_s.encode('UTF-8'))
+                top << "Content-Type: multipart/mixed; boundary=\"#{mixed_boundary}\""
+
+                # First part: either multipart/alternative (text+html), or a single text/* part
+                mixed_parts = []
+                if has_text && has_html
+                    alt_boundary = call(:random_boundary, 'alt')
+                    alt_parts = [
+                        call(:part_text, text_body, 'plain'),
+                        call(:part_text, html_body, 'html')
+                    ]
+                    mixed_parts << call(:part_multipart, 'alternative', alt_boundary, alt_parts)
+                elsif has_html
+                    mixed_parts << call(:part_text, html_body, 'html')
+                else
+                    # Default to text/plain even if empty to ensure a body exists
+                    mixed_parts << call(:part_text, (text_body || ''), 'plain')
+                end
+
+                # Attachment parts
+                Array(atts).each do |att|
+                    part = call(:part_attachment, att)
+                    mixed_parts << part if part
+                end
+
+                body = call(:multipart_body, mixed_boundary, mixed_parts)
             else
-                # Default to text body.
-                top << "MIME-Version: 1.0"
-                top << "Content-Type: text/plain; charset=UTF-8"
-                top << "Content-Transfer-Encoding: base64"
-                body = call(:b64wrap, text_body.to_s.encode('UTF-8'))
+                # No attachments >> behave like before (alternative or single part)
+                if has_text && has_html
+                    alt_boundary = call(:random_boundary, 'alt')
+                    top << "MIME-Version: 1.0"
+                    top << "Content-Type: multipart/alternative; boundary=\"#{alt_boundary}\""
+                    parts = [
+                        call(:part_text, text_body, 'plain'),
+                        call(:part_text, html_body, 'html')
+                    ]
+                    body = call(:multipart_body, alt_boundary, parts)
+                elsif has_html
+                    top << "MIME-Version: 1.0"
+                    top << "Content-Type: text/html; charset=UTF-8"
+                    top << "Content-Transfer-Encoding: base64"
+                    body = call(:b64wrap, html_body.to_s.encode('UTF-8'))
+                else
+                    top << "MIME-Version: 1.0"
+                    top << "Content-Type: text/plain; charset=UTF-8"
+                    top << "Content-Transfer-Encoding: base64"
+                    body = call(:b64wrap, text_body.to_s.encode('UTF-8'))
+                end
             end
 
             # --- Final Assembly and Return ---
             # 1. Combine headers and body into a single RFC 822 message string.
-            rfc822 = (top + ["", body]).join(crlf)
+            rfc822 = (top + ['', body]).join(crlf)
 
             # 2. Base64 URL encode the entire message for the Gmail API.
             raw = call(:b64url, rfc822)
 
             # 3. Return the final output.
             { raw: raw }
-        },
         }
     },
     methods: {
@@ -1600,11 +1662,80 @@ require 'time'
             "",
             call(:b64wrap, text.to_s.encode('UTF-8'))
           ].join(crlf)
-        },     
+        },
+        part_multipart: ->(subtype, boundary, parts) {
+            crlf = "\r\n"
+            [
+                "Content-Type: multipart/#{subtype}; boundary=\"#{boundary}\"",
+                "",
+                call(:multipart_body, boundary, parts)
+            ].join(crlf)
+        },
+        part_attachment: ->(att) {
+            # Build an attachment part (base64). Accepts either 'content_base64', or raw 'content' (text).
+            return nil unless att.is_a?(Hash)
+
+            crlf = "\r\n"
+            filename   = (att['filename'] || att[:filename]).to_s
+            return nil if filename.strip.empty?
+
+            mime_type  = (att['mime_type'] || att[:mime_type] || call(:detect_mime_type, filename)).to_s
+            disposition = (att['disposition'] || att[:disposition]).to_s.strip.downcase
+            disposition = %w[inline attachment].include?(disposition) ? disposition : 'attachment'
+            content_id = (att['content_id'] || att[:content_id]).to_s.strip
+
+            # Prefer base64, else treat `content` as raw text (for small text files)
+            if (b64 = (att['content_base64'] || att[:content_base64]).to_s).strip != ''
+                bytes = Base64.decode64(b64)
+            else
+                raw = (att['content'] || att[:content]).to_s
+                bytes = raw.dup.force_encoding('BINARY')
+            end
+
+            safe_name = call(:sanitize_header, filename)
+
+            headers = [
+                "Content-Type: #{mime_type}; name=\"#{safe_name}\"",
+                "Content-Transfer-Encoding: base64",
+                "Content-Disposition: #{disposition}; filename=\"#{safe_name}\""
+            ]
+            headers << "Content-ID: <#{call(:sanitize_header, content_id)}>" unless content_id.empty?
+
+            (headers + ["", call(:b64wrap, bytes)]).join(crlf)
+        
+        }, 
         multipart_body: ->(boundary, parts) {
           # Joins multiple message parts with a boundary.
           crlf = "\r\n"
           (parts.flat_map { |p| ["--#{boundary}", p] } + ["--#{boundary}--"]).join(crlf)
+        },
+        detect_mime_type: ->(filename) {
+            ext = File.extname(filename.to_s.downcase).sub('.', '')
+            mapping = {
+                'txt'  => 'text/plain',
+                'csv'  => 'text/csv',
+                'htm'  => 'text/html',
+                'html' => 'text/html',
+                'json' => 'application/json',
+                'xml'  => 'application/xml',
+                'pdf'  => 'application/pdf',
+                'jpg'  => 'image/jpeg', 'jpeg' => 'image/jpeg', 'jpe' => 'image/jpeg',
+                'png'  => 'image/png',  'gif'  => 'image/gif',  'bmp' => 'image/bmp',
+                'webp' => 'image/webp', 'svg'  => 'image/svg+xml',
+                'tif'  => 'image/tiff', 'tiff' => 'image/tiff',
+                'xls'  => 'application/vnd.ms-excel',
+                'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'doc'  => 'application/msword',
+                'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'ppt'  => 'application/vnd.ms-powerpoint',
+                'pptx' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                'zip'  => 'application/zip', 'gz' => 'application/gzip', 'tar' => 'application/x-tar',
+                '7z'   => 'application/x-7z-compressed',
+                'rtf'  => 'application/rtf',
+                'mp3'  => 'audio/mpeg', 'wav' => 'audio/wav',
+                'mp4'  => 'video/mp4',  'mov' => 'video/quicktime', 'avi' => 'video/x-msvideo'
+            }
+            mapping[ext] || 'application/octet-stream'
         },
 
         # Transformations
@@ -1819,31 +1950,33 @@ require 'time'
             processed = []
 
             entries.each do |entry|
-                next unless entry.respond_to?(:[]) 
-                         call('present?', entry['date']) 
-                         call('present?', entry['units'])
-                next unless call('present?', entry['date']) 
-                            call('present?', entry['units'])
+                next unless entry.respond_to?(:[]) &&
+                            call(:present?, entry['date']) &&
+                            call(:present?, entry['units'])
 
-                # format date
+                # Format date as YYYY-MM-DD
                 fmt = begin
-                if entry['date'].is_a?(Date)
-                    entry['date'].strftime('%Y-%m-%d')
-                else
-                    Date.parse(entry['date'].to_s).strftime('%Y-%m-%d')
-                end
+                    if entry['date'].is_a?(Date)
+                        entry['date'].strftime('%Y-%m-%d')
+                    else
+                        Date.parse(entry['date'].to_s).strftime('%Y-%m-%d')
+                    end
                 rescue
-                nil
+                    nil
                 end
                 next unless fmt
 
-                # units → float
-                units_f = begin entry['units'].to_f rescue 0.0 end
+                # Units → float
+                units_f = begin
+                    Float(entry['units'])
+                rescue
+                    entry['units'].to_f
+                end
 
                 processed << {
-                'date'   => fmt,
-                'units'  => units_f,
-                'status' => entry['status']
+                    'date'   => fmt,
+                    'units'  => units_f,
+                    'status' => entry['status']
                 }
             end
 
