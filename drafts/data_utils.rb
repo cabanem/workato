@@ -5,6 +5,7 @@ require 'date'
 require 'base64'
 require 'securerandom'
 require 'time'
+require 'digest'
 
 {
     title: 'Data Utilities',
@@ -745,7 +746,7 @@ require 'time'
             },
             webhook_subscribe:      ->(_connection, _input_fields, _flow_id) { { webhook_id: 'discover' } },
             webhook_unsubscribe:    ->(_connection, _id) {},
-            dedup:                  ->(records) { records },
+            dedup:                  ->(records) { Digest::SHA1.hexdigest(record.to_json) },
             webhook_notification:   ->(input, _payload) {
                 records = input['sample_records'] || []
                 first   = records.first || {}
