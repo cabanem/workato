@@ -408,12 +408,13 @@ require 'digest'
             }
         },
         email_output_rfc822: {
-          fields: -> (object_definitions, _connection) {
+          fields: -> (_object_definitions, _connection) {
             [
               { 
                       name: 'raw',
-                      type: 'string', 
-                      label: 'Raw Message',
+                      type: 'string',
+                      control_type: 'text-area'
+                      label: 'Raw Message (base64url)',
                       hint: 'Base64 URL-safe encoded RFC 822 email message, suitable for use with email APIs like Gmail.' 
               }
             ]
@@ -1699,10 +1700,10 @@ require 'digest'
             end
             if %w[lists both].include?(format)
                 fields += [
-                    { name: 'dates', label: 'Date', type: 'array', of: 'date' },
+                    { name: 'dates',    label: 'Dates',    type: 'array', of: 'date' },
                     { name: 'units',    label: 'Units',    type: 'array', of: 'number' },
                     { name: 'statuses', label: 'Statuses', type: 'array', of: 'string' }
-                ]
+                 ]
             end
             if %w[flat_fields both].include?(format)
                 (1..max_flat).each do |i|
