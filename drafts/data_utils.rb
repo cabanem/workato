@@ -316,92 +316,74 @@ require 'digest'
                     {
                         name: 'sender_details',
                         type: :object,
-                        control_type: 'form',
-                        label: 'Sender Details',
+                        control_type: 'nested_fields',
+                        label: 'Sender',
                         properties: [
                             {
                                 name: 'from',
                                 type: 'string',
-                                control_type: 'text',
+                                control_type: 'nested_fields',
                                 label: 'From',
-                                hint: 'Sender email address. E.g., "Sender Name <sender@example.com>" or just sender@example.com.',
-                                optional: false
+                                optional: false,
+                                properties: object_definitions['email_address_fields']
                             }
                         ]
                     },
                     {
                         name: 'recipient_details',
                         type: :object,
-                        control_type: 'form',
-                        label: 'Recipient Details',
+                        control_type: 'nested_fields',
+                        label: 'Recipients',
                         properties: [
-                        {
-                            name: 'to',
-                            type: 'array',
-                            of: 'string',
-                            control_type: 'text',
-                            label: 'To',
-                            hint: 'Recipient email address(es). Use a list pill or comma-separated values.',
-                            optional: false
-                        },
-                        {
-                            name: 'cc',
-                            type: 'array',
-                            of: 'string',
-                            control_type: 'text',
-                            label: 'Cc',
-                            optional: true,
-                            hint: 'CC recipient email address(es).'
-                        },
-                        {
-                            name: 'bcc',
-                            type: 'array',
-                            of: 'string',
-                            control_type: 'text',
-                            label: 'Bcc',
-                            optional: true,
-                            hint: 'BCC recipient email address(es).'
-                        },
-                        {
-                            name: 'reply_to',
-                            type: 'array',
-                            of: 'string',
-                            control_type: 'text',
-                            label: 'Reply-To',
-                            optional: true,
-                            hint: 'Reply-To email address(es).'
-                        }
+                            {
+                                name: 'to',
+                                type: :array,
+                                of: :object,
+                                control_type: 'nested_fields',
+                                label: 'To',
+                                hint: 'Map an array pill of objects with name/email.',
+                                optional: false,
+                                properties: object_definitions['email_address_fields']
+                            },
+                            {
+                                name: 'cc',
+                                type: :array,
+                                of: :object,
+                                control_type: 'text',
+                                label: 'Cc',
+                                optional: true,
+                                properties: object_definitions['email_address_fields']
+                            },
+                            {
+                                name: 'bcc',
+                                type: :array,
+                                of: :object,
+                                control_type: 'nested_fields',
+                                label: 'Bcc',
+                                optional: true,
+                                properties: object_definitions['email_address_fields']
+                            },
+                            {
+                                name: 'reply_to',
+                                type: :array,
+                                of: :object,
+                                control_type: 'nested_fields',
+                                label: 'Reply-To',
+                                optional: true,
+                                properties: object_definitions['email_address_fields']
+
+                            }
                         ]
                     },
                     {
                         name: 'email_content',
                         type: :object,
-                        control_type: 'form',
-                        label: 'Email Content',
+                        control_type: 'nested_fields',
+                        label: 'Content',
                         properties: [
-                        {
-                            name: 'subject',
-                            type: 'string',
-                            control_type: 'text',
-                            label: 'Subject',
-                            optional: false
-                        },
-                        {
-                            name: 'text_body',
-                            type: 'string',
-                            control_type: 'text-area',
-                            label: 'Text Body',
-                            optional: true,
-                            hint: 'Plain text version of the email body.'
-                        },
-                        {
-                            name: 'html_body',
-                            type: 'string',
-                            control_type: 'text-area',
-                            label: 'HTML Body',
-                            optional: true,
-                            hint: 'HTML version of the email body.'
-                        }
+                            { name: 'subject',   type: 'string', control_type: 'text',       label: 'Subject',   optional: false },
+                            { name: 'text_body', type: 'string', control_type: 'text-area',  label: 'Text Body', optional: true, hint: 'Plain text version.' },
+                            { name: 'html_body', type: 'string', control_type: 'text-area',  label: 'HTML Body', optional: true, hint: 'HTML version.' }
                         ]
                     },
                     {
@@ -436,6 +418,14 @@ require 'digest'
               }
             ]
           }
+        },
+        email_address_fields: {
+            fields: ->(_connection, _config_fields) {
+                [
+                    { name: 'name', label: 'Name', type: 'string', control_type: 'text', optional: true, hint: 'Optional display name' },
+                    { name: 'email', label: 'Email', type: 'string', control_type: 'text',   optional: false, hint: 'user@example.com' }
+                ]
+            }
         },
         email_input: {
             fields: ->(connection) {
