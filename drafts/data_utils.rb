@@ -284,7 +284,7 @@ require 'digest'
             }
         },
         table_input: {
-            fields: ->(object_definitions, connection, config_fields) {
+            fields: ->(object_definitions, _connection, _config_fields) {
                 [
                     {
                         name: 'date_entries',
@@ -551,14 +551,14 @@ require 'digest'
                 [
                     name: 'email_content',
                     type: :object,
-                    control_type: 'form',
+                    control_type: 'nested_fields',
                     label: 'Email Content',
                     optional: false,
                     properties: [
-                        { name: 'custom_greeting',      type: :string, control_type: 'select',      label: 'Custom Greeting',       optional: true,     sticky: true, group: 'Email Content' },
-                        { name: 'custom_body',          type: :string, control_type: 'text-area',   label: 'Custom Message Body',   optional: false,    sticky: true, group: 'Email Content' },
-                        { name: 'custom_signoff',       type: :string, control_type: 'select',      label: 'Custom Signoff',        optional: true,     sticky: true, group: 'Email Content' },
-                        { name: 'custom_sender_name',   type: :string, control_type: 'select',      label: 'Custom Sender Name',    optional: true,     sticky: true, group: 'Email Content' }
+                        { name: 'custom_greeting',    type: :string, control_type: 'select',    label: 'Custom Greeting',    optional: true,  sticky: true, pick_list: 'email_greeting' },
+                        { name: 'custom_body',        type: :string, control_type: 'text-area', label: 'Custom Message Body',optional: false, sticky: true },
+                        { name: 'custom_signoff',     type: :string, control_type: 'select',    label: 'Custom Signoff',     optional: true,  sticky: true, pick_list: 'email_signoff' },
+                        { name: 'custom_sender_name', type: :string, control_type: 'select',    label: 'Custom Sender Name', optional: true,  sticky: true, pick_list: 'email_sender_name' }
                     ]
                 ]
             }
@@ -674,10 +674,14 @@ require 'digest'
           ]
         },
         email_sender_name: -> {
-            [ 'REDACTED Contractor Care Team', 'REDACTED Contractor Care Team' ]
+            [
+                [ 'REDACTED Contractor Care Team', 'REDACTED Contractor Care Team' ]
+            ]
         },
         email_greeting: -> {
-            [ 'Hello,', 'Hello' ]
+            [
+                [ 'Hello,', 'Hello' ]
+            ]
         },
         public_form_base_url: -> {
           [
@@ -730,7 +734,7 @@ require 'digest'
             },
             webhook_subscribe:      ->(_connection, _input_fields, _flow_id) { { webhook_id: 'discover' } },
             webhook_unsubscribe:    ->(_connection, _id) {},
-            dedup:                  ->(records) { Digest::SHA1.hexdigest(record.to_json) },
+            dedup:                  ->(record) { Digest::SHA1.hexdigest(record.to_json) },
             webhook_notification:   ->(input, _payload) {
                 records = input['sample_records'] || []
                 first   = records.first || {}
@@ -837,7 +841,7 @@ require 'digest'
                 format = (config_fields['output_format'] || 'both').to_s
                 max    = (config_fields['max_flat_entries'] || 10).to_i
                 [ 
-                    { control_type: 'text', type: 'string', name: 'serialized_entries', label: 'Serialized Entries JSON' },
+                    { control_type: 'text-area', type: 'string', name: 'serialized_entries', label: 'Serialized Entries JSON' },
                     *call(:output_fields_for_format, object_definitions, format, max),
                     { name: 'total_requested_units', label: 'Total Requested Units', type: 'number', optional: true, hint: 'Sum of all valid units requested' }
                 ]
@@ -969,7 +973,7 @@ require 'digest'
                 end
                 if %w[lists both].include?(format)
                     out['dates']    = entries.map { |e| e['date'] }
-                    out['units']    = entires.map { |e| e['units'] }
+                    out['units']    = entries.map { |e| e['units'] }
                     out['statuses'] = entries.map { |e| e['status'] }
                 end
                 if %w[flat_fields both].include?(format)
@@ -1079,12 +1083,8 @@ require 'digest'
             help: ->() {
               "Use this calculate time."
             },
-            input_fields: ->(object_definitions) {
-                object_definitions['generic_input']
-            },
-            output_fields: ->(object_definitions) {
-                object_definitions['generic_output']
-            },
+            input_fields: ->(object_definitions) {object_definitions['generic_input']},
+            output_fields: ->(object_definitions) {object_definitions['generic_output']},
             config_fields: [
                 {
                     name: "substring_field",
@@ -1129,16 +1129,16 @@ require 'digest'
                     default: 48
                 }
             ],
-            execute: ->(_connection, input, config) {
+            execute: ->(_connection, input) {
                 records = input['records'] || []
                 
                 # Get configurable parameters
-                substring_field = config['substring_field'] || 'record_type'
-                substring_value = config['substring_value'] || 'request'
-                reminder_field = config['reminder_field'] || 'reminder_email_datetime'
-                request_field = config['request_field'] || 'request_date'
-                reminder_hours = (config['reminder_hours'] || 12).to_i
-                request_hours = (config['request_hours'] || 48).to_i
+                substring_field = input['substring_field'] || 'record_type'
+                substring_value = input['substring_value'] || 'request'
+                reminder_field  = input['reminder_field'] || 'reminder_email_datetime'
+                request_field   = input['request_field'] || 'request_date'
+                reminder_hours  = (input['reminder_hours'] || 12).to_i
+                request_hours   = (input['request_hours'] || 48).to_i
 
                 # Calculate thresholds
                 now = Time.now.utc
