@@ -127,7 +127,7 @@ require 'digest'
               { 
                       name: 'raw',
                       type: 'string',
-                      control_type: 'text-area'
+                      control_type: 'text-area',
                       label: 'Raw Message (base64url)',
                       hint: 'Base64 URL-safe encoded RFC 822 email message, suitable for use with email APIs like Gmail.' 
               }
