@@ -261,6 +261,33 @@ require 'digest'
           output_fields: ->(object_definitions) { object_definitions['email_output_rfc822'] },
           execute: ->(_connection, input) {
             # ------- Main -------
+            # Flatten function params
+            if input.key?('from_email') || input.key?('to_emails')
+              parse_list = ->(s) {
+                s.to_s.split(/[,;\n]/).map { |t| t.strip }.reject(&:empty?)
+              }
+              parse_atts = ->(s) {
+                return [] if s.to_s.strip.empty?
+                JSON.parse(s)
+              }
+              input = {
+                'sender_details' => {
+                  'from' => { 'name' => input['from_name'], 'email' => input['from_email'] }.compact
+                },
+                'recipient_details' => {
+                  'to'       => parse_list.call(input['to_emails']),
+                  'cc'       => parse_list.call(input['cc_emails']),
+                  'bcc'      => parse_list.call(input['bcc_emails']),
+                  'reply_to' => parse_list.call(input['reply_to_emails'])
+                },
+                'email_content' => {
+                  'subject'   => input['subject'],
+                  'text_body' => input['text_body'],
+                  'html_body' => input['html_body']
+                },
+                'attachments' => parse_atts.call(input['attachments_json'])
+              }
+            end
             # 1. Gather Inputs from nested structure
             from      = input.dig('sender_details', 'from')
             to        = input.dig('recipient_details', 'to')
