@@ -1,11 +1,8 @@
 # frozen_string_literal: true
-require 'uri'
 require 'json'
-require 'date'
 require 'base64'
 require 'securerandom'
 require 'time'
-require 'digest'
 
 {
     title: 'Data Utilities',
@@ -56,7 +53,7 @@ require 'digest'
                                 control_type: 'nested_fields',
                                 label: 'To',
                                 hint: 'Map an array pill of objects with name/email.',
-                                optional: false,
+                                optional: true,
                                 properties: object_definitions['email_address_fields']
                             },
                             {
@@ -257,7 +254,23 @@ require 'digest'
           subtitle: 'Construct a raw email message for API use',
           help: 'This action builds a raw RFC 822 compliant email message and encodes it in Base64 URL-safe format. This is commonly required for sending emails via APIs like the Gmail API.',
           display_priority: 10,
-          input_fields:  ->(object_definitions) { object_definitions['email_input_rfc822'] },
+          input_fields:  ->(object_definitions) {
+            # Flat, function-friendly fields (all optional)
+            [
+              { name: 'from_email',        type: :string, control_type: 'text',      optional: true },
+              { name: 'from_name',         type: :string, control_type: 'text',      optional: true },
+              { name: 'to_emails',         type: :string, control_type: 'text-area', optional: true,
+                hint: 'Comma/semicolon/newline separated. Supports "Name <email>" or bare emails.' },
+              { name: 'cc_emails',         type: :string, control_type: 'text-area', optional: true },
+              { name: 'bcc_emails',        type: :string, control_type: 'text-area', optional: true },
+              { name: 'reply_to_emails',   type: :string, control_type: 'text-area', optional: true },
+              { name: 'subject',           type: :string, control_type: 'text',      optional: true },
+              { name: 'text_body',         type: :string, control_type: 'text-area', optional: true },
+              { name: 'html_body',         type: :string, control_type: 'text-area', optional: true },
+              { name: 'attachments_json',  type: :string, control_type: 'text-area', optional: true,
+                hint: 'JSON array: [{filename, mime_type?, content_base64? | content?, disposition?, content_id?}]' }
+            ] + object_definitions['email_input_rfc822']
+          },
           output_fields: ->(object_definitions) { object_definitions['email_output_rfc822'] },
           execute: ->(_connection, input) {
             # ------- Main -------
@@ -267,8 +280,13 @@ require 'digest'
                 s.to_s.split(/[,;\n]/).map { |t| t.strip }.reject(&:empty?)
               }
               parse_atts = ->(s) {
-                return [] if s.to_s.strip.empty?
-                JSON.parse(s)
+                str = s.to_s.strip
+                return [] if str.empty?
+                begin
+                  JSON.parse(str)
+                rescue JSON::ParserError => e
+                  raise "attachments_json is invalid JSON: #{e.message}"
+                end
               }
               input = {
                 'sender_details' => {
@@ -316,8 +334,8 @@ require 'digest'
             from_norm = call(:normalize_address, from)
             raise "From is required and must include a valid email" if from_norm.to_s.strip.empty?
             to_line = call(:join_addresses, to)
-            cc_line = call(join_addresses, cc)
-            bcc_line = call(join_addresses, bcc)
+            cc_line = call(:join_addresses, cc)
+            bcc_line = call(:join_addresses, bcc)
             raise "At least one recipient is required (To, Cc, or Bcc)." if [to_line, cc_line, bcc_line].all? { |s| s.to_s.strip.empty? }
 
             # 2. Build Message Headers
