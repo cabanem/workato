@@ -28,9 +28,7 @@
       "extensions": [
         "anthropic.claude-code",
         "github.copilot",
-        "shopify.ruby-lsp",
-        "kaiwood.endwise",
-        "castwide.solargraph"
+        "shopify.ruby-lsp"
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "zsh",
