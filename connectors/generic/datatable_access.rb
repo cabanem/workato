@@ -133,15 +133,8 @@
         end
       end,
       
-      apply: lambda do |connection, access_token|
-        if connection["auth_type"] == "api_token"
-          headers(
-            "X-USER-TOKEN": access_token["api_token"],
-            "X-USER-EMAIL": access_token["email"]
-          )
-        else
-          headers("Authorization": "Bearer #{access_token['access_token']}")
-        end
+      apply: lambda do |connection|
+        headers("Authorization": "Bearer #{connection['api_token']}")
       end
     },
     
@@ -153,21 +146,21 @@
   # ==========================================
   # TEST CONNECTION
   # ==========================================
-  test: lambda do |connection|
-    # Test basic connectivity
-    begin
-      user_info = call(:execute_with_retry, connection, :get, "/api/user")
+  test: lambda do |_connection|
+    # Minimal, stable endpoints only
+    me = get("/api/users/me")
+    tables = get("/api/data_tables").params(page: 1, per_page: 1)
 
-      {
-        success: true,
-        message: "Connection successful!",
-        account: user_info["email"] || "Unknown",
-        workspace: user_info["workspace_name"] || "Default"
-      }
-
-    rescue => e
-      error("Connection failed: #{e.message}")
-    end
+    {
+      success: true,
+      message: "Connected",
+      account_name: me["name"] || me["id"],
+      sample_table_count: (tables["data"] || []).length
+    }
+  rescue RestClient::ExceptionWithResponse => e
+    error("Test failed (#{e.http_code}): #{e.response&.body || e.message}")
+  rescue => e
+    error("Test failed: #{e.message}")
   end,
 
   # ==========================================
