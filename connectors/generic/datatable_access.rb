@@ -418,80 +418,248 @@
   # ==========================================
   actions: {
     # ==== TABLES (Developer API) ===
-
-    # ==== TABLE MANAGEMENT ACTIONS ====
     # Create Table
     create_table: {
       title: "Create data table",
-      subtitle: "Create a new data table with schema",
-      
       input_fields: lambda do
         [
-          { name: "name", label: "Table Name", optional: false,
-            hint: "Unique name for the data table" },
-          { name: "description", label: "Description", optional: true,
-            hint: "Description of the table's purpose" },
-          { name: "columns", label: "Columns", type: "array", of: "object", 
-            optional: false, properties: [
-              { name: "name", label: "Column Name", optional: false },
-              { name: "type", label: "Data Type", control_type: "select",
+          { name: "name", optional: false },
+          { name: "folder_id", type: "integer", optional: false },
+          {
+            name: "schema",
+            type: "array", of: "object",
+            optional: false,
+            properties: [
+              {
+                name: "type",
+                optional: false,
+                control_type: "select",
                 pick_list: [
                   ["String", "string"],
                   ["Integer", "integer"],
-                  ["Decimal", "decimal"],
+                  ["Number (decimal)", "number"],
                   ["Boolean", "boolean"],
-                  ["Datetime", "datetime"],
-                  ["Text", "text"],
-                  ["JSON", "json"]
-                ],
-                optional: false },
-              { name: "required", label: "Required", type: "boolean", default: false },
-              { name: "unique", label: "Unique", type: "boolean", default: false },
-              { name: "default_value", label: "Default Value", optional: true },
-              { name: "description", label: "Description", optional: true }
-            ]},
-          { name: "metadata", label: "Metadata", type: "object", optional: true,
-            hint: "Custom metadata for the table" }
+                  ["Date", "date"],
+                  ["Datetime", "date_time"],
+                  ["File", "file"],
+                  ["Relation", "relation"]
+                ]
+              },
+              { name: "name", optional: false },
+              { name: "optional", type: "boolean", default: true },
+              { name: "hint", optional: true },
+              { name: "default_value", optional: true },
+              { name: "multivalue", type: "boolean", optional: true },
+              {
+                name: "relation",
+                type: "object",
+                optional: true,
+                properties: [
+                  { name: "table_id" },
+                  { name: "field_id" }
+                ]
+              }
+            ]
+          }
         ]
       end,
-      
       output_fields: lambda do |object_definitions|
-        object_definitions["table"]
+        { name: "data", type: "object", properties: object_definitions["table"] }
       end,
-      
-      sample_output: lambda do |connection, input|
-        {
-          id: 12345,
-          name: "customers",
-          description: "Customer data table",
-          schema_id: 67890,
-          row_count: 0,
-          created_at: "2024-01-01T10:00:00Z",
-          updated_at: "2024-01-01T10:00:00Z",
-          created_by: "user@example.com"
-        }
-      end,
-      
-      execute: lambda do |connection, input|
-        payload = {
+      execute: lambda do |_connection, input|
+        post("/api/data_tables").payload(
           name: input["name"],
-          description: input["description"],
-          schema: {
-            columns: input["columns"]
+          folder_id: input["folder_id"],
+          schema: input["schema"]
+        )
+      end
+    },
+
+    # Update table
+    update_table: {
+      title: "Update data table",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "name", optional: true },
+          { name: "folder_id", type: "integer", optional: true },
+          { name: "schema", type: "array", of: "object", optional: true, properties: [
+            { name: "type" }, { name: "name" },
+            { name: "optional", type: "boolean" },
+            { name: "hint" }, { name: "default_value" },
+            { name: "multivalue", type: "boolean" },
+            { name: "relation", type: "object", properties: [
+              { name: "table_id" }, { name: "field_id" }
+            ]}
+          ]}
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        { name: "data", type: "object", properties: object_definitions["table"] }
+      end,
+      execute: lambda do |_connection, input|
+        body = {}
+        body[:name] = input["name"] if input["name"].present?
+        body[:folder_id] = input["folder_id"] if input["folder_id"].present?
+        body[:schema] = input["schema"] if input["schema"].present?
+        put("/api/data_tables/#{input['table_id']}").payload(body)
+      end
+    },
+
+    # === RECORDS ===
+    query_records: {
+      title: "Query records (v1)",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "select", label: "Columns to select", type: "array", optional: true,
+            hint: "Use field names or $UUID meta-fields: $record_id, $created_at, $updated_at" },
+          { name: "filters", label: "Filters", type: "object", optional: true, properties: [
+            { name: "operator", control_type: "select", pick_list: [["AND","and"],["OR","or"]], default: "and" },
+            { name: "conditions", type: "array", of: "object", properties: [
+              { name: "column" },
+              { name: "operator", control_type: "select",
+                pick_list: [
+                  ["Equals", "eq"], ["Not equals", "ne"],
+                  ["Greater than", "gt"], ["Less than", "lt"],
+                  ["Greater or equal", "gte"], ["Less or equal", "lte"],
+                  ["In list", "in"], ["Starts with", "starts_with"]
+                ]
+              },
+              { name: "value" }
+            ]}
+          ]},
+          { name: "order", label: "Sort", type: "object", optional: true, properties: [
+            { name: "column" }, { name: "order", control_type: "select",
+              pick_list: [["Ascending","asc"],["Descending","desc"]], default: "asc" },
+            { name: "case_sensitive", type: "boolean", default: false }
+          ]},
+          { name: "limit", type: "integer", default: 100 },
+          { name: "continuation_token", optional: true },
+          { name: "timezone_offset_secs", type: "integer", optional: true,
+            hint: "Required when comparing a datetime field to a date value" }
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        object_definitions["records_result"]
+      end,
+      execute: lambda do |connection, input|
+        where = call(:build_where, input["filters"])
+        order = if input["order"].present? && input["order"]["column"].present?
+                  {
+                    by: input["order"]["column"],
+                    order: input["order"]["order"] || "asc",
+                    case_sensitive: !!input["order"]["case_sensitive"]
+                  }
+                end
+
+        body = {
+          select: input["select"],
+          where: where,
+          order: order,
+          limit: input["limit"] || 100,
+          continuation_token: input["continuation_token"],
+          timezone_offset_secs: input["timezone_offset_secs"]
+        }.compact
+
+        base = call(:records_base, connection)
+        # Docs conflict: try /records/query first, then fallback to /query
+        primary = "#{base}/api/v1/tables/#{input['table_id']}/records/query"
+        fallback = "#{base}/api/v1/tables/#{input['table_id']}/query"
+
+        resp = call(:execute_with_retry, connection) { post(primary).payload(body) }
+      rescue RestClient::NotFound
+        resp = call(:execute_with_retry, connection) { post(fallback).payload(body) }
+      ensure
+        if resp.is_a?(Hash)
+          {
+            records: resp["records"] || resp["data"] || resp["select"] || [],
+            continuation_token: resp["continuation_token"]
           }
+        else
+          # Some endpoints return arrays; normalize
+          { records: Array.wrap(resp), continuation_token: nil }
+        end
+      end
+    },
+
+    create_record: {
+      title: "Create record (v1)",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "data", label: "Field values", type: "object", optional: false,
+            hint: "Keys are field names or $UUID (e.g. \"$28c00d...\": \"Josh\")" }
+        ]
+      end,
+      output_fields: lambda do
+        [
+          { name: "record_id" },
+          { name: "created_at", type: "timestamp" },
+          { name: "document", type: "array", of: "object" }
+        ]
+      end,
+      execute: lambda do |connection, input|
+        base = call(:records_base, connection)
+        url = "#{base}/api/v1/tables/#{input['table_id']}/records"
+        result = call(:execute_with_retry, connection) { post(url).payload(input["data"]) }
+        # Spec shows array reply sometimes; normalize to first element/hash
+        rec = result.is_a?(Array) ? (result.first || {}) : result
+        {
+          record_id: rec["record_id"],
+          created_at: rec["created_at"],
+          document: rec["document"]
         }
-        payload[:metadata] = input["metadata"] if input["metadata"].present?
-        
-        call(:execute_with_retry, connection, :post, "/api/data_tables", payload: payload)
-      rescue RestClient::Exception => e
-        call(:handle_api_errors, e.response)
-        error("Failed to create table: #{e.message}")
+      end
+    },
+
+    update_record: {
+      title: "Update record (v1)",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "record_id", optional: false, hint: "Use $record_id" },
+          { name: "data", label: "Field values to update", type: "object", optional: false }
+        ]
+      end,
+      output_fields: lambda do
+        [
+          { name: "document", type: "object" }
+        ]
+      end,
+      execute: lambda do |connection, input|
+        base = call(:records_base, connection)
+        url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{input['record_id']}"
+        call(:execute_with_retry, connection) { put(url).payload(input["data"]) }
+      end
+    },
+
+    delete_record: {
+      title: "Delete record (v1)",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "record_id", optional: false }
+        ]
+      end,
+      output_fields: lambda do
+        [
+          { name: "status", type: "integer" }
+        ]
+      end,
+      execute: lambda do |connection, input|
+        base = call(:records_base, connection)
+        url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{input['record_id']}"
+        resp = call(:execute_with_retry, connection) { delete(url) }
+        # Some replies return { data: { status: 200 } }
+        { status: resp.dig("data","status") || 200 }
       end
     },
     
-    # Delete Table
+    # DEPRECATED
     delete_table: {
       title: "Delete data table",
+      deprecated: true,
       subtitle: "Permanently delete a data table and all its data",
       
       input_fields: lambda do
@@ -532,65 +700,9 @@
         error("Failed to delete table: #{e.message}")
       end
     },
-    
-    # List Data Tables
-    list_data_tables: {
-      title: "List data tables",
-      subtitle: "Get all data tables in your account",
-      
-      input_fields: lambda do
-        [
-          { name: "include_metadata", type: "boolean", default: false,
-            hint: "Include custom metadata for each table" },
-          { name: "include_schema", type: "boolean", default: false,
-            hint: "Include schema information for each table" }
-        ]
-      end,
-      
-      output_fields: lambda do |object_definitions|
-        [
-          { name: "tables", type: "array", of: "object", 
-            properties: object_definitions["table"] },
-          { name: "total_count", type: "integer", label: "Total Count" }
-        ]
-      end,
-      
-      sample_output: lambda do |connection, input|
-        {
-          tables: [
-            {
-              id: 12345,
-              name: "customers",
-              schema_id: 67890,
-              row_count: 150,
-              created_at: "2024-01-01T10:00:00Z",
-              updated_at: "2024-01-15T14:30:00Z"
-            }
-          ],
-          total_count: 1
-        }
-      end,
-      
-      execute: lambda do |connection, input|
-        params = {}
-        params[:include_metadata] = true if input["include_metadata"]
-        params[:include_schema] = true if input["include_schema"]
-        
-        response = call(:execute_with_retry, connection, :get, "/api/data_tables", params: params)
-        
-        { 
-          tables: response["tables"] || response,
-          total_count: response["total_count"] || response.length
-        }
-      rescue RestClient::Exception => e
-        call(:handle_api_errors, e.response)
-        error("Failed to list tables: #{e.message}")
-      end
-    },
-    
-    # Get Table Schema
     get_table_schema: {
       title: "Get table schema",
+      deprecated: true,
       subtitle: "Get the schema/structure of a data table",
       
       input_fields: lambda do
@@ -619,10 +731,9 @@
         error("Failed to get schema: #{e.message}")
       end
     },
-    
-    # Advanced Filtering
     search_rows_advanced: {
       title: "Search rows (Advanced)",
+      deprecated: true,
       subtitle: "Search for rows with complex AND/OR filtering",
       
       input_fields: lambda do
@@ -714,10 +825,9 @@
         error("Failed to search rows: #{e.message}")
       end
     },
-    
-    # Batch Update
     batch_update_rows: {
       title: "Batch update rows",
+      deprecated: true,
       subtitle: "Update multiple rows in a single transaction",
       
       input_fields: lambda do
@@ -768,10 +878,9 @@
         error("Failed to batch update: #{e.message}")
       end
     },
-    
-    # Batch Delete
     batch_delete_rows: {
       title: "Batch delete rows",
+      deprecated: true,
       subtitle: "Delete multiple rows in a single transaction",
       
       input_fields: lambda do
@@ -816,10 +925,9 @@
         error("Failed to batch delete: #{e.message}")
       end
     },
-    
-    # Export Table
     export_table: {
       title: "Export table data",
+      deprecated: true,
       subtitle: "Export table data in various formats",
       
       input_fields: lambda do
@@ -886,10 +994,9 @@
         error("Failed to export table: #{e.message}")
       end
     },
-    
-    # Import Table Data
     import_table_data: {
       title: "Import table data",
+      deprecated: true,
       subtitle: "Import data from file into table",
       
       input_fields: lambda do
@@ -964,10 +1071,9 @@
         error("Failed to import data: #{e.message}")
       end
     },
-    
-    # Aggregate Data
     aggregate_data: {
       title: "Aggregate table data",
+      deprecated: true,
       subtitle: "Perform aggregation operations on table data",
       
       input_fields: lambda do
@@ -1035,10 +1141,9 @@
         error("Failed to aggregate data: #{e.message}")
       end
     },
-    
-    # Add Column
    add_column: {
       title: "Add column to table",
+      deprecated: true,
       subtitle: "Add a new column to an existing table",
       
       input_fields: lambda do
@@ -1101,8 +1206,6 @@
         error("Failed to add column: #{e.message}")
       end
     },
-    
-    # Drop Column
     drop_column: {
       title: "Remove column from table",
       subtitle: "Remove a column from an existing table",
@@ -1154,8 +1257,6 @@
         error("Failed to drop column: #{e.message}")
       end
     },
-    
-    # Clone Table
     clone_table: {
       title: "Clone table",
       subtitle: "Create a copy of an existing table",
@@ -1196,8 +1297,6 @@
         error("Failed to clone table: #{e.message}")
       end
     },
-    
-    # Table Audit Log
     get_table_audit_log: {
       title: "Get table audit log",
       subtitle: "Retrieve audit log for table changes",
@@ -1254,8 +1353,6 @@
         error("Failed to get audit log: #{e.message}")
       end
     },
-    
-    # Data Relationships Management
     create_table_relationship: {
       title: "Create table relationship",
       subtitle: "Define foreign key relationship between tables",
@@ -1323,8 +1420,6 @@
         error("Failed to create relationship: #{e.message}")
       end
     },
-
-    # Computed columns
     add_computed_column: {
       title: "Add computed column",
       subtitle: "Add a virtual column with computed values",
@@ -1381,8 +1476,6 @@
         error("Failed to add computed column: #{e.message}")
       end
     },
-    
-    # Row-Level Security
     configure_row_security: {
       title: "Configure row-level security",
       subtitle: "Set up row-level access control for a table",
@@ -1437,8 +1530,6 @@
         error("Failed to configure security: #{e.message}")
       end
     },
-    
-    # Field Masking for Sensitive Data
     configure_field_masking: {
       title: "Configure field masking",
       subtitle: "Set up data masking for sensitive fields",
@@ -1497,8 +1588,6 @@
         error("Failed to configure masking: #{e.message}")
       end
     },
-    
-    # Advanced Join Operations
     join_tables: {
       title: "Join tables",
       subtitle: "Perform SQL-like joins between tables",
@@ -1572,8 +1661,6 @@
         error("Failed to join tables: #{e.message}")
       end
     },
-    
-    # Data Type Conversion
     convert_column_type: {
       title: "Convert column data type",
       subtitle: "Change the data type of an existing column",
@@ -1654,10 +1741,9 @@
         error("Failed to convert column type: #{e.message}")
       end
     },
-    
-    # Table Partitioning
     partition_table: {
       title: "Partition table",
+      deprecated: true,
       subtitle: "Create partitions for large tables",
       
       input_fields: lambda do
@@ -1738,10 +1824,9 @@
         error("Failed to partition table: #{e.message}")
       end
     },
-    
-    # Index Management
     create_index: {
       title: "Create table index",
+      deprecated: true,
       subtitle: "Create an index to improve query performance",
       
       input_fields: lambda do
@@ -1799,10 +1884,9 @@
         error("Failed to create index: #{e.message}")
       end
     },
-    
-    # Performance Analysis
     analyze_table_performance: {
       title: "Analyze table performance",
+      deprecated: true,
       subtitle: "Get performance metrics and optimization suggestions",
       
       input_fields: lambda do
@@ -1867,10 +1951,9 @@
         error("Failed to analyze performance: #{e.message}")
       end
     },
-    
-    # Backup and Restore
     backup_table: {
       title: "Backup table",
+      deprecated: true,
       subtitle: "Create a backup of table data and schema",
       
       input_fields: lambda do
@@ -1923,9 +2006,9 @@
         error("Failed to create backup: #{e.message}")
       end
     },
-    
     restore_table: {
       title: "Restore table from backup",
+      deprecated: true,
       subtitle: "Restore table data and schema from a backup",
       
       input_fields: lambda do
@@ -1970,10 +2053,9 @@
         error("Failed to restore table: #{e.message}")
       end
     },
-    
-    # Data Validation Rules
     create_validation_rule: {
       title: "Create validation rule",
+      deprecated: true,
       subtitle: "Add data validation rules to a table",
       
       input_fields: lambda do
