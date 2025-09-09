@@ -174,31 +174,26 @@
   # HELPER METHODS
   # ==========================================
   methods: {
-    # Execute with retry logic for rate limiting
-    execute_with_retry: lambda do |connection, request_type, url, options = {}|
-      max_retries = connection["enable_retry"] ? (connection["max_retries"] || 3) : 0
+    # Global host for record APIs (not region-specific)
+    records_base: lambda do |_connection|
+      "https://data-tables.workato.com"
+    end,
+
+    # Hardened retry for 429
+    execute_with_retry: lambda do |connection, &block|
       retries = 0
-      
+      max_retries = (connection["max_retries"] || 3).to_i
       begin
-        case request_type
-        when :get
-          options[:params].present? ? get(url).params(options[:params]) : get(url)
-        when :post
-          options[:payload].present? ? post(url).payload(options[:payload]) : post(url)
-        when :put
-          options[:payload].present? ? put(url).payload(options[:payload]) : put(url)
-        when :delete
-          options[:payload].present? ? delete(url).payload(options[:payload]) : delete(url)
-        end
-      rescue => e
-        if e.response && e.response.code == 429 && retries < max_retries
-          retry_after = e.response.headers[:retry_after].to_i || 60
-          sleep(retry_after)
+        block.call
+      rescue RestClient::ExceptionWithResponse => e
+        if e.http_code == 429 && connection["enable_retry"] && retries < max_retries
+          hdrs = e.response&.headers || {}
+          ra = hdrs["Retry-After"] || hdrs[:retry_after] || 60
+          sleep(ra.to_i)
           retries += 1
           retry
-        else
-          raise e
         end
+        raise
       end
     end,
     
@@ -300,6 +295,41 @@
           end
         }
       end
+    end,
+
+    # Map UI filters to Data Tables `$` operators
+    build_where: lambda do |filters|
+      return nil unless filters.present?
+
+      op_map = {
+        "eq" => "$eq",
+        "ne" => "$ne",
+        "gt" => "$gt",
+        "lt" => "$lt",
+        "gte" => "$gte",
+        "lte" => "$lte",
+        "in" => "$in",
+        "starts_with" => "$starts_with"
+      }
+
+      conditions = (filters["conditions"] || []).map do |c|
+        next nil unless c["column"].present? && c["operator"].present?
+        oper = op_map[c["operator"]]
+        next nil unless oper
+        val = c["value"]
+        { c["column"] => { oper => val } }
+      end.compact
+
+      return nil if conditions.empty?
+
+      if conditions.length == 1 || (filters["operator"] || "and") == "and"
+        # shorthand AND allowed
+        # Merge when safe (single condition) otherwise wrap in $and
+        return conditions.first if conditions.length == 1
+        { "$and" => conditions }
+      else
+        { "$or" => conditions }
+      end
     end
   },
   
@@ -307,11 +337,9 @@
   # PICKUP VALUES (Dynamic field values)
   # ==========================================
   pick_lists: {
-    tables: lambda do |connection|
-      response = call(:execute_with_retry, connection, :get, "/api/data_tables")
-      # the .pluck method isn't available in this context
-      # response.pluck("name", "id").map { |name, id| [name, id] }
-      response.map { |item| [item["name"], item["id"]] }
+    tables: lambda do |_connection|
+      r = get("/api/data_tables").params(page: 1, per_page: 100)
+      (r["data"] || []).map { |t| [t["name"], t["id"]] }
     end,
     
     table_columns: lambda do |connection, table_id:|
@@ -333,6 +361,14 @@
           { name: "name", label: "Table Name" },
           { name: "description", label: "Description" },
           { name: "schema_id", type: "integer", label: "Schema ID" },
+          { name: "schema", type: "array", of: "object", properties: [
+            { name: "type" },
+            { name: "name" },
+            { name: "optional", type: "boolean" },
+            { name: "field_id" },
+            { name: "hint" },
+            { name: "multivalue", type: "boolean" }
+          ]},
           { name: "row_count", type: "integer", label: "Row Count" },
           { name: "created_at", type: "timestamp", label: "Created At" },
           { name: "updated_at", type: "timestamp", label: "Updated At" },
@@ -365,6 +401,15 @@
           { name: "data", type: "object", label: "Row Data" }
         ]
       end
+    },
+    
+    records_result: {
+      fields: lambda do |_connection, _config|
+        [
+          { name: "records", type: "array", of: "object" },
+          { name: "continuation_token" }
+        ]
+      end
     }
   },
 
@@ -372,6 +417,8 @@
   # ACTIONS
   # ==========================================
   actions: {
+    # ==== TABLES (Developer API) ===
+
     # ==== TABLE MANAGEMENT ACTIONS ====
     # Create Table
     create_table: {
