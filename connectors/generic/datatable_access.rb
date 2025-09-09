@@ -36,7 +36,8 @@
         control_type: "password",
         optional: true,
         hint: "Your Workato API token (found in Account Settings > API Tokens)",
-        ngIf: "input.auth_type == 'api_token'"
+        # ngIf: "input.auth_type == 'api_token'" # << this is not correct
+        ngIf: "input['auth_type'] == 'api_token'" # but this is
       },
       {
         name: "client_id",
@@ -44,7 +45,8 @@
         control_type: "text",
         optional: true,
         hint: "OAuth Client ID from API Platform settings",
-        ngIf: "input.auth_type == 'oauth2'"
+        # ngIf: "input.auth_type == 'oauth2'"
+        ngIf: "input['auth_type'] == 'oauth2'"
       },
       {
         name: "client_secret",
@@ -52,7 +54,7 @@
         control_type: "password",
         optional: true,
         hint: "OAuth Client Secret (only shown once when creating API client)",
-        ngIf: "input.auth_type == 'oauth2'"
+        ngIf: "input['auth_type'] == 'oauth2'"
       },
       {
         name: "email",
@@ -60,7 +62,7 @@
         control_type: "text",
         optional: true,
         hint: "Your Workato account email (required for API token auth)",
-        ngIf: "input.auth_type == 'api_token'"
+        ngIf: "input['auth_type'] == 'api_token'"
       },
       {
         name: "enable_retry",
@@ -78,7 +80,8 @@
         default: 3,
         optional: true,
         hint: "Maximum number of retry attempts",
-        ngIf: "input.enable_retry == true"
+        #ngIf: "input.enable_retry == true"
+        ngIf: "input['enable_retry'] == true"
       }
     ],
     
@@ -1461,7 +1464,7 @@
             ], optional: false },
           { name: "masking_pattern", label: "Masking Pattern", optional: true,
             hint: "Pattern for masking (e.g., XXX-XX-#### for SSN)",
-            ngIf: "input.masking_type == 'custom'" },
+            ngIf: "input['masking_type'] == 'custom'" },
           { name: "roles_to_unmask", label: "Roles with Access", type: "array",
             optional: true,
             hint: "Roles that can see unmasked data" },
@@ -1607,7 +1610,7 @@
           { name: "custom_function", label: "Custom Conversion Function",
             optional: true,
             hint: "Custom SQL function for conversion",
-            ngIf: "input.conversion_rule == 'custom'" },
+            ngIf: "input['conversion_rule'] == 'custom'" },
           { name: "handle_errors", label: "Error Handling", 
             control_type: "select",
             pick_list: [
@@ -1617,7 +1620,7 @@
             ], default: "fail" },
           { name: "default_value", label: "Default Value for Errors",
             optional: true,
-            ngIf: "input.handle_errors == 'default'" }
+            ngIf: "input['handle_errors'] == 'default'" }
         ]
       end,
       
@@ -1680,7 +1683,7 @@
           { name: "partition_count", label: "Number of Partitions",
             type: "integer", optional: true,
             hint: "For hash partitioning",
-            ngIf: "input.partition_type == 'hash'" },
+            ngIf: "input['partition_type'] == 'hash'" },
           { name: "partition_interval", label: "Partition Interval",
             control_type: "select",
             pick_list: [
@@ -1689,7 +1692,7 @@
               ["Monthly", "month"],
               ["Yearly", "year"]
             ],
-            ngIf: "input.partition_type == 'datetime'" },
+            ngIf: "input['partition_type'] == 'datetime'" },
           { name: "partition_ranges", label: "Partition Ranges",
             type: "array", of: "object", optional: true,
             properties: [
@@ -1697,7 +1700,7 @@
               { name: "from_value", label: "From Value" },
               { name: "to_value", label: "To Value" }
             ],
-            ngIf: "input.partition_type == 'range'" }
+            ngIf: "input['partition_type'] == 'range'" }
         ]
       end,
       
