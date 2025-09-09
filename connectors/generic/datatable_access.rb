@@ -87,7 +87,6 @@
     
     authorization: {
       type: "custom_auth",
-      
       apply: lambda do |connection|
         headers("Authorization": "Bearer #{connection['api_token']}")
       end
@@ -168,21 +167,19 @@
       error("Table ID must be a positive integer") unless table_id.to_i > 0
     end,
     
-    validate_row_data: lambda do |row_data, schema|
-      return unless schema.present?
-      
-      schema["columns"].each do |column|
-        if column["required"] && row_data[column["name"]].blank?
-          error("Required field missing: #{column['name']}")
+    validate_row_data: lambda do |row_data, table|
+      return unless table.present?
+      cols = table["schema"] || []
+      cols.each do |col|
+        fname = col["name"]
+        required = (col["optional"] == false)
+        if required && (row_data[fname].nil? || row_data[fname].to_s == "")
+          error("Required field missing: #{fname}")
         end
-        
-        # Type validation
-        if row_data[column["name"]].present?
-          call(:validate_field_type, row_data[column["name"]], column["type"], column["name"])
-        end
+        # Optional: type checks keyed to Data Tables types (string, integer, number, boolean, date, date_time, file, relation)
       end
     end,
-    
+
     validate_field_type: lambda do |value, type, field_name|
       case type
       when "integer"
@@ -213,10 +210,11 @@
       params[:offset] = 0
       
       loop do
-        response = call(:execute_with_retry, connection, :get, url, params: params)
-        all_results.concat(response["rows"])
-        
-        break unless response["has_more"]
+        response = call(:execute_with_retry, connection) { get(url).params(params) }
+        rows = response["rows"] || response["records"] || response["data"] || []
+
+        has_more = response["has_more"] || (rows.length == params[:limit])
+        break unless has_more
         params[:offset] += params[:limit]
         
         # Prevent infinite loops
@@ -321,8 +319,9 @@
     table_columns: lambda do |connection, table_id:|
       return [] unless table_id.present?
       
-      schema = call(:execute_with_retry, connection, :get, "/api/data_tables/#{table_id}/schema")
-      schema["columns"].map { |col| [col["name"], col["name"]] }
+      table = call(:execute_with_retry, connection) { get("/api/data_tables/#{table_id}") }
+      cols = table["schema"] || table.dig("data", "schema") || []
+      cols.map { |col| [col["name"], col["name"]] }
     end,
 
     folders: lambda do |_connection|
@@ -688,11 +687,8 @@
       execute: lambda do |connection, input|
         where = call(:build_where, input["filters"])
         order = if input["order"].present? && input["order"]["column"].present?
-                  {
-                    by: input["order"]["column"],
-                    order: input["order"]["order"] || "asc",
-                    case_sensitive: !!input["order"]["case_sensitive"]
-                  }
+                  { by: input["order"]["column"], order: input["order"]["order"] || "asc",
+                    case_sensitive: !!input["order"]["case_sensitive"] }
                 end
 
         body = {
@@ -705,23 +701,27 @@
         }.compact
 
         base = call(:records_base, connection)
-        # Docs conflict: try /records/query first, then fallback to /query
         primary = "#{base}/api/v1/tables/#{input['table_id']}/records/query"
         fallback = "#{base}/api/v1/tables/#{input['table_id']}/query"
 
-        resp = call(:execute_with_retry, connection) { post(primary).payload(body) }
-      rescue RestClient::NotFound
-        resp = call(:execute_with_retry, connection) { post(fallback).payload(body) }
-      ensure
+        resp = nil
+        begin
+          resp = call(:execute_with_retry, connection) { post(primary).payload(body) }
+        rescue RestClient::NotFound
+          resp = call(:execute_with_retry, connection) { post(fallback).payload(body) }
+        end
+
         if resp.is_a?(Hash)
           {
-            records: resp["records"] || resp["data"] || resp["select"] || [],
+            records: resp["records"] || resp["data"] || [],
             continuation_token: resp["continuation_token"]
           }
         else
-          # Some endpoints return arrays; normalize
-          { records: Array.wrap(resp), continuation_token: nil }
+          { records: Array(resp || []), continuation_token: nil }
         end
+
+      rescue RestClient::ExceptionWithResponse => e
+        error("Query failed: #{e.response&.body || e.message}")
       end
     },
     create_record: {
@@ -820,7 +820,8 @@
         (input["records"] || []).each_with_index do |rec, idx|
           begin
             res = call(:execute_with_retry, connection) { post(url).payload(rec["data"]) }
-            successes << (res.is_a?(Array) ? res.first : res)
+            successes << (res.is_a?(Array) ? (res.first || {}) : (res || {}))
+
           rescue RestClient::ExceptionWithResponse => e
             errors << call(:make_error_hash, idx, nil, e)
           rescue => e
@@ -861,7 +862,7 @@
           begin
             url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{u['record_id']}"
             res = call(:execute_with_retry, connection) { put(url).payload(u["data"]) }
-            successes << res
+            successes << (res.is_a?(Array) ? (res.first || {}) : (res || {}))
           rescue RestClient::ExceptionWithResponse => e
             errors << call(:make_error_hash, idx, u["record_id"], e)
           rescue => e
@@ -898,8 +899,9 @@
         (input["record_ids"] || []).each_with_index do |rid, idx|
           begin
             url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{rid}"
-            call(:execute_with_retry, connection) { delete(url) }
-            successes << { record_id: rid, status: 200 }
+            resp = call(:execute_with_retry, connection) { delete(url) }
+            { status: resp.dig("data", "status") || 200 }
+
           rescue RestClient::ExceptionWithResponse => e
             errors << call(:make_error_hash, idx, rid, e)
           rescue => e
