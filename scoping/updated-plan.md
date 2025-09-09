@@ -1,6 +1,6 @@
 # Complete Data Tables Mapping for Workato RAG Email Response System
 
-## Primary Data Tables (7 Tables from Document)
+## Primary Data Tables
 
 ### 1. **rag_system_config**
 *Purpose: Centralized configuration management*
