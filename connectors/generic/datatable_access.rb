@@ -330,6 +330,34 @@
       else
         { "$or" => conditions }
       end
+    end,
+
+    # Try the canonical records query path, then the legacy one.
+    records_query_call: lambda do |connection, table_id, body|
+      base = call(:records_base, connection)
+      primary = "#{base}/api/v1/tables/#{table_id}/records/query"
+      fallback = "#{base}/api/v1/tables/#{table_id}/query"
+      call(:execute_with_retry, connection) { post(primary).payload(body) }
+    rescue RestClient::NotFound
+      call(:execute_with_retry, connection) { post(fallback).payload(body) }
+    end,
+
+    normalize_records_result: lambda do |_connection, resp|
+      {
+        records: resp["records"] || resp["data"] || [],
+        continuation_token: resp["continuation_token"]
+      }
+    end,
+
+    # Uniform error object for batch ops
+    make_error_hash: lambda do |_connection, idx, id, e|
+      {
+        index: idx,
+        record_id: id,
+        http_code: (e.respond_to?(:http_code) ? e.http_code : nil),
+        message: e.message.to_s.gsub(/\s+/, " ")[0, 500],
+        body: (e.respond_to?(:response) ? e.response&.body : nil)
+      }
     end
   },
   
@@ -347,6 +375,16 @@
       
       schema = call(:execute_with_retry, connection, :get, "/api/data_tables/#{table_id}/schema")
       schema["columns"].map { |col| [col["name"], col["name"]] }
+    end,
+
+    folders: lambda do |_connection|
+      r = get("/api/folders").params(page: 1, per_page: 200)
+      (r["data"] || []).map { |f| [f["name"], f["id"]] }
+    end,
+
+    projects: lambda do |_connection|
+      r = get("/api/projects").params(page: 1, per_page: 200)
+      (r["data"] || []).map { |p| [p["name"], p["id"]] }
     end
   },
 
@@ -408,6 +446,47 @@
         [
           { name: "records", type: "array", of: "object" },
           { name: "continuation_token" }
+        ]
+      end
+    },
+
+    folder: {
+      fields: lambda do |_connection, _config|
+        [
+          { name: "id" },
+          { name: "name" },
+          { name: "parent_id" },
+          { name: "project_id" },
+          { name: "created_at", type: "timestamp" },
+          { name: "updated_at", type: "timestamp" }
+        ]
+      end
+    },
+
+    project: {
+      fields: lambda do |_connection, _config|
+        [
+          { name: "id" },
+          { name: "name" },
+          { name: "created_at", type: "timestamp" },
+          { name: "updated_at", type: "timestamp" }
+        ]
+      end
+    },
+
+    batch_result: {
+      fields: lambda do |_connection, _config|
+        [
+          { name: "success_count", type: "integer" },
+          { name: "error_count", type: "integer" },
+          { name: "results", type: "array", of: "object" },
+          { name: "errors", type: "array", of: "object", properties: [
+            { name: "index", type: "integer" },
+            { name: "record_id" },
+            { name: "http_code", type: "integer" },
+            { name: "message" },
+            { name: "body" }
+          ] }
         ]
       end
     }
