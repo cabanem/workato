@@ -155,28 +155,19 @@
   # ==========================================
   test: lambda do |connection|
     # Test basic connectivity
-    user_info = get("/api/user")
-    
-    # Test data table access
-    tables = get("/api/data_tables").params(limit: 1)
-    
-    # Test permissions
-    permissions = get("/api/permissions")
-    
-    {
-      success: true,
-      message: "Connection successful!",
-      account: user_info["email"],
-      workspace: user_info["workspace_name"],
-      permissions: permissions["data_tables"],
-      tables_accessible: tables["total_count"]
-    }
-  rescue RestClient::Unauthorized => e
-    error("Authentication failed. Please check your credentials.")
-  rescue RestClient::Forbidden => e
-    error("Access forbidden. Please check your permissions.")
-  rescue => e
-    error("Connection test failed: #{e.message}")
+    begin
+      user_info = call(:execute_with_retry, connection, :get, "/api/user")
+
+      {
+        success: true,
+        message: "Connection successful!",
+        account: user_info["email"] || "Unknown",
+        workspace: user_info["workspace_name"] || "Default"
+      }
+
+    rescue => e
+      error("Connection failed: #{e.message}")
+    end
   end,
 
   # ==========================================
@@ -185,79 +176,30 @@
   methods: {
     # Execute with retry logic for rate limiting
     execute_with_retry: lambda do |connection, request_type, url, options = {}|
-      return_value = nil
+      max_retries = connection["enable_retry"] ? (connection["max_retries"] || 3) : 0
+      retries = 0
       
-      if connection["enable_retry"]
-        max_retries = connection["max_retries"] || 3
-        retries = 0
-        
-        begin
-          case request_type
-          when :get
-            return_value = if options[:params].present?
-              get(url).params(options[:params])
-            else
-              get(url)
-            end
-          when :post
-            return_value = if options[:payload].present?
-              post(url).payload(options[:payload])
-            else
-              post(url)
-            end
-          when :put
-            return_value = if options[:payload].present?
-              put(url).payload(options[:payload])
-            else
-              put(url)
-            end
-          when :delete
-            return_value = if options[:payload].present?
-              delete(url).payload(options[:payload])
-            else
-              delete(url)
-            end
-          end
-        rescue RestClient::TooManyRequests => e
-          if retries < max_retries
-            retry_after = e.response.headers[:retry_after].to_i || 60
-            sleep(retry_after)
-            retries += 1
-            retry
-          else
-            raise
-          end
-        end
-      else
+      begin
         case request_type
         when :get
-          return_value = if options[:params].present?
-            get(url).params(options[:params])
-          else
-            get(url)
-          end
+          options[:params].present? ? get(url).params(options[:params]) : get(url)
         when :post
-          return_value = if options[:payload].present?
-            post(url).payload(options[:payload])
-          else
-            post(url)
-          end
+          options[:payload].present? ? post(url).payload(options[:payload]) : post(url)
         when :put
-          return_value = if options[:payload].present?
-            put(url).payload(options[:payload])
-          else
-            put(url)
-          end
+          options[:payload].present? ? put(url).payload(options[:payload]) : put(url)
         when :delete
-          return_value = if options[:payload].present?
-            delete(url).payload(options[:payload])
-          else
-            delete(url)
-          end
+          options[:payload].present? ? delete(url).payload(options[:payload]) : delete(url)
+        end
+      rescue => e
+        if e.response && e.response.code == 429 && retries < max_retries
+          retry_after = e.response.headers[:retry_after].to_i || 60
+          sleep(retry_after)
+          retries += 1
+          retry
+        else
+          raise e
         end
       end
-      
-      return_value
     end,
     
     # Robust Error Handling
@@ -1122,10 +1064,17 @@
         [
           { name: "table_id", label: "Table ID", type: "integer", 
             optional: false, control_type: "select", pick_list: "tables" },
-          { name: "column_name", label: "Column Name", optional: false,
+          { 
+            name: "column_name",
+            label: "Column Name",
+            optional: false,
             control_type: "select", 
-            pick_list: "table_columns",
-            pick_list_params: { table_id: "table_id" } },
+            pick_list: lambda do |connection, table_id:|
+              return [] unless table_id.present?
+              schema = get("/api/data_tables/#{table_id}/schema")
+              schema["columns"].map { |col| [col["name"], col["name"]] }
+            end
+          },
           { name: "confirm", label: "Confirm Deletion", type: "boolean",
             optional: false,
             hint: "Set to true to confirm column deletion" }
@@ -2062,14 +2011,15 @@
       webhook_subscribe: lambda do |webhook_url, connection, input|
         call(:validate_table_id, input["table_id"])
         
-        payload = {
-          url: webhook_url,
-          event: "data_table.row.created",
-          table_id: input["table_id"]
-        }
-        payload[:columns] = input["columns"] if input["columns"].present?
+        response = call(:execute_with_retry, connection, :post, "/api/webhooks", 
+          payload: {
+            url: webhook_url,
+            event: "data_table.row.created",
+            table_id: input["table_id"],
+            columns: input["columns"]
+          })
         
-        post("/api/webhooks").payload(payload)
+        response  # Return the webhook object for unsubscribe
       end,
       
       webhook_unsubscribe: lambda do |webhook, connection|
@@ -2103,18 +2053,19 @@
         ]
       end,
       
-      webhook_subscribe: lambda do |webhook_url, connection, input|
-        call(:validate_table_id, input["table_id"])
-        
-        payload = {
+    webhook_subscribe: lambda do |webhook_url, connection, input|
+      call(:validate_table_id, input["table_id"])
+      
+      response = call(:execute_with_retry, connection, :post, "/api/webhooks", 
+        payload: {
           url: webhook_url,
-          event: "data_table.row.updated",
-          table_id: input["table_id"]
-        }
-        payload[:columns] = input["columns"] if input["columns"].present?
-        
-        post("/api/webhooks").payload(payload)
-      end,
+          event: "data_table.row.created",
+          table_id: input["table_id"],
+          columns: input["columns"]
+        })
+      
+      response  # Return the webhook object for unsubscribe
+    end,
       
       webhook_unsubscribe: lambda do |webhook, connection|
         delete("/api/webhooks/#{webhook['id']}")
@@ -2154,11 +2105,14 @@
       webhook_subscribe: lambda do |webhook_url, connection, input|
         call(:validate_table_id, input["table_id"])
         
-        post("/api/webhooks").payload(
-          url: webhook_url,
-          event: "data_table.row.deleted",
-          table_id: input["table_id"]
-        )
+        response = call(:execute_with_retry, connection, :post, "/api/webhooks",
+          payload: {
+            url: webhook_url,
+            event: "data_table.row.deleted",
+            table_id: input["table_id"]
+          })
+
+        response
       end,
       
       webhook_unsubscribe: lambda do |webhook, connection|
@@ -2197,11 +2151,14 @@
       webhook_subscribe: lambda do |webhook_url, connection, input|
         call(:validate_table_id, input["table_id"])
         
-        post("/api/webhooks").payload(
-          url: webhook_url,
-          event: "data_table.schema.changed",
-          table_id: input["table_id"]
-        )
+        response = call(:execute_with_retry, connection, :post, "/api/webhooks",
+          payload: {
+            url: webhook_url,
+            event: "data_table.schema.changed",
+            table_id: input["table_id"]
+          })
+
+        response
       end,
       
       webhook_unsubscribe: lambda do |webhook, connection|
@@ -2383,13 +2340,15 @@
       webhook_subscribe: lambda do |webhook_url, connection, input|
         call(:validate_table_id, input["table_id"])
         
-        post("/api/webhooks").payload(
-          url: webhook_url,
-          event: "data_table.quality.alert",
-          table_id: input["table_id"],
-          quality_checks: input["quality_checks"],
-          check_frequency: input["check_frequency"]
-        )
+        response = call(:execute_with_retry, connection, :post, "/api/webhooks",
+          payload: {
+            url: webhook_url,
+            event: "data_table.quality.alert",
+            table_id: input["table_id"],
+            quality_checks: input["quality_checks"],
+            check_frequency: input["check_frequency"]
+          })
+        response
       end,
       
       webhook_unsubscribe: lambda do |webhook, connection|
