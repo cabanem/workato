@@ -182,7 +182,7 @@
   # HELPER METHODS
   # ==========================================
   methods: {
-    # IMPROVEMENT 1: Robust Error Handling
+    #  Robust Error Handling
     handle_api_errors: lambda do |response|
       case response.code
       when 404
@@ -199,7 +199,7 @@
       end
     end,
     
-    # IMPROVEMENT 9: Rate Limiting Handler
+    # Rate Limiting Handler
     with_rate_limit_retry: lambda do |connection, &block|
       return yield unless connection["enable_retry"]
       
@@ -220,7 +220,7 @@
       end
     end,
     
-    # IMPROVEMENT 8: Input Validation
+    # Input Validation
     validate_table_id: lambda do |table_id|
       error("Table ID is required") if table_id.blank?
       error("Table ID must be a positive integer") unless table_id.to_i > 0
@@ -264,7 +264,7 @@
       end
     end,
     
-    # IMPROVEMENT 11: Pagination Helper
+    # Pagination Helper
     paginate_all: lambda do |connection, url, params = {}|
       all_results = []
       params[:limit] ||= 100
@@ -373,7 +373,7 @@
   # ==========================================
   actions: {
     # ==== TABLE MANAGEMENT ACTIONS ====
-    # IMPROVEMENT 2: Create Table
+    # Create Table
     create_table: {
       title: "Create data table",
       subtitle: "Create a new data table with schema",
@@ -444,7 +444,7 @@
       end
     },
     
-    # IMPROVEMENT 2: Delete Table
+    # Delete Table
     delete_table: {
       title: "Delete data table",
       subtitle: "Permanently delete a data table and all its data",
@@ -490,7 +490,7 @@
       end
     },
     
-    # ==== EXISTING ACTIONS WITH IMPROVEMENTS ====
+    # List Data Tables
     list_data_tables: {
       title: "List data tables",
       subtitle: "Get all data tables in your account",
@@ -546,6 +546,7 @@
       end
     },
     
+    # Get Table Schema
     get_table_schema: {
       title: "Get table schema",
       subtitle: "Get the schema/structure of a data table",
@@ -579,7 +580,7 @@
       end
     },
     
-    # IMPROVEMENT 3: Advanced Filtering
+    # Advanced Filtering
     search_rows_advanced: {
       title: "Search rows (Advanced)",
       subtitle: "Search for rows with complex AND/OR filtering",
@@ -675,7 +676,7 @@
       end
     },
     
-    # IMPROVEMENT 4: Batch Update
+    # Batch Update
     batch_update_rows: {
       title: "Batch update rows",
       subtitle: "Update multiple rows in a single transaction",
@@ -731,7 +732,7 @@
       end
     },
     
-    # IMPROVEMENT 4: Batch Delete
+    # Batch Delete
     batch_delete_rows: {
       title: "Batch delete rows",
       subtitle: "Delete multiple rows in a single transaction",
@@ -781,7 +782,7 @@
       end
     },
     
-    # IMPROVEMENT 6: Export Table
+    # Export Table
     export_table: {
       title: "Export table data",
       subtitle: "Export table data in various formats",
@@ -853,7 +854,7 @@
       end
     },
     
-    # IMPROVEMENT 6: Import Table Data
+    # Import Table Data
     import_table_data: {
       title: "Import table data",
       subtitle: "Import data from file into table",
@@ -933,7 +934,7 @@
       end
     },
     
-    # IMPROVEMENT 7: Aggregate Data
+    # Aggregate Data
     aggregate_data: {
       title: "Aggregate table data",
       subtitle: "Perform aggregation operations on table data",
@@ -1006,7 +1007,7 @@
       end
     },
     
-    # IMPROVEMENT 12: Add Column
+    # Add Column
     add_column: {
       title: "Add column to table",
       subtitle: "Add a new column to an existing table",
@@ -1074,7 +1075,7 @@
       end
     },
     
-    # IMPROVEMENT 12: Drop Column
+    # Drop Column
     drop_column: {
       title: "Remove column from table",
       subtitle: "Remove a column from an existing table",
@@ -1121,7 +1122,7 @@
       end
     },
     
-    # Additional: Clone Table
+    # Clone Table
     clone_table: {
       title: "Clone table",
       subtitle: "Create a copy of an existing table",
@@ -1165,7 +1166,7 @@
       end
     },
     
-    # Additional: Table Audit Log
+    # Table Audit Log
     get_table_audit_log: {
       title: "Get table audit log",
       subtitle: "Retrieve audit log for table changes",
@@ -1223,6 +1224,809 @@
         call(:handle_api_errors, e.response)
         error("Failed to get audit log: #{e.message}")
       end
+    },
+
+    # Data Relationships Management
+    create_table_relationship: {
+      title: "Create table relationship",
+      subtitle: "Define foreign key relationship between tables",
+      
+      input_fields: lambda do
+        [
+          { name: "parent_table_id", label: "Parent Table", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "parent_column", label: "Parent Column", optional: false,
+            control_type: "select", pick_list: "table_columns",
+            pick_list_params: { table_id: "parent_table_id" } },
+          { name: "child_table_id", label: "Child Table", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "child_column", label: "Child Column", optional: false,
+            control_type: "select", pick_list: "table_columns",
+            pick_list_params: { table_id: "child_table_id" } },
+          { name: "relationship_type", label: "Relationship Type",
+            control_type: "select",
+            pick_list: [
+              ["One to One", "one_to_one"],
+              ["One to Many", "one_to_many"],
+              ["Many to Many", "many_to_many"]
+            ], optional: false },
+          { name: "on_delete", label: "On Delete Action",
+            control_type: "select",
+            pick_list: [
+              ["Cascade", "cascade"],
+              ["Set Null", "set_null"],
+              ["Restrict", "restrict"],
+              ["No Action", "no_action"]
+            ], default: "restrict" },
+          { name: "on_update", label: "On Update Action",
+            control_type: "select",
+            pick_list: [
+              ["Cascade", "cascade"],
+              ["Set Null", "set_null"],
+              ["Restrict", "restrict"],
+              ["No Action", "no_action"]
+            ], default: "cascade" }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "relationship_id", type: "integer" },
+          { name: "created_at", type: "timestamp" },
+          { name: "constraint_name" }
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        payload = {
+          parent_table_id: input["parent_table_id"],
+          parent_column: input["parent_column"],
+          child_table_id: input["child_table_id"],
+          child_column: input["child_column"],
+          relationship_type: input["relationship_type"],
+          on_delete: input["on_delete"],
+          on_update: input["on_update"]
+        }
+        
+        call(:with_rate_limit_retry, connection) do
+          post("/api/data_tables/relationships").payload(payload)
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to create relationship: #{e.message}")
+      end
+    },
+
+    # Computed columns
+    add_computed_colum: {
+        title: "Add computed column",
+      subtitle: "Add a virtual column with computed values",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "column_name", label: "Column Name", optional: false },
+          { name: "expression", label: "Computation Expression", optional: false,
+            hint: "SQL expression for computing values (e.g., price * quantity)" },
+          { name: "return_type", label: "Return Type", control_type: "select",
+            pick_list: [
+              ["String", "string"],
+              ["Integer", "integer"],
+              ["Decimal", "decimal"],
+              ["Boolean", "boolean"],
+              ["Datetime", "datetime"]
+            ], optional: false },
+          { name: "stored", label: "Store Computed Value", type: "boolean",
+            default: false,
+            hint: "Store computed value in database (vs compute on-the-fly)" },
+          { name: "description", label: "Description", optional: true }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "success", type: "boolean" },
+          { name: "column", type: "object" }
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        call(:validate_table_id, input["table_id"])
+        
+        payload = {
+          name: input["column_name"],
+          expression: input["expression"],
+          return_type: input["return_type"],
+          stored: input["stored"],
+          description: input["description"]
+        }
+        
+        call(:with_rate_limit_retry, connection) do
+          response = post("/api/data_tables/#{input['table_id']}/computed_columns").
+            payload(payload)
+          
+          {
+            success: true,
+            column: response
+          }
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to add computed column: #{e.message}")
+      end
+    },
+    
+    # Row-Level Security
+    configure_row_security: {
+      title: "Configure row-level security",
+      subtitle: "Set up row-level access control for a table",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "policy_name", label: "Policy Name", optional: false },
+          { name: "policy_type", label: "Policy Type", control_type: "select",
+            pick_list: [
+              ["Read", "read"],
+              ["Write", "write"],
+              ["Delete", "delete"],
+              ["All", "all"]
+            ], optional: false },
+          { name: "user_column", label: "User Column", optional: false,
+            hint: "Column containing user identifier" },
+          { name: "condition", label: "Access Condition", optional: false,
+            hint: "SQL condition for row access (e.g., user_id = current_user())" },
+          { name: "role", label: "Apply to Role", optional: true,
+            hint: "Specific role to apply policy to (all roles if empty)" },
+          { name: "enabled", label: "Enable Policy", type: "boolean",
+            default: true }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "policy_id", type: "integer" },
+          { name: "created_at", type: "timestamp" },
+          { name: "enabled", type: "boolean" }
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        call(:validate_table_id, input["table_id"])
+        
+        payload = {
+          policy_name: input["policy_name"],
+          policy_type: input["policy_type"],
+          user_column: input["user_column"],
+          condition: input["condition"],
+          role: input["role"],
+          enabled: input["enabled"]
+        }
+        
+        call(:with_rate_limit_retry, connection) do
+          post("/api/data_tables/#{input['table_id']}/security_policies").
+            payload(payload)
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to configure security: #{e.message}")
+      end
+    },
+    
+    # Field Masking for Sensitive Data
+    configure_field_masking: {
+      title: "Configure field masking",
+      subtitle: "Set up data masking for sensitive fields",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "column_name", label: "Column to Mask", optional: false,
+            control_type: "select", pick_list: "table_columns",
+            pick_list_params: { table_id: "table_id" } },
+          { name: "masking_type", label: "Masking Type", control_type: "select",
+            pick_list: [
+              ["Partial", "partial"],
+              ["Full", "full"],
+              ["Hash", "hash"],
+              ["Encrypt", "encrypt"],
+              ["Custom Pattern", "custom"]
+            ], optional: false },
+          { name: "masking_pattern", label: "Masking Pattern", optional: true,
+            hint: "Pattern for masking (e.g., XXX-XX-#### for SSN)",
+            ngIf: "input.masking_type == 'custom'" },
+          { name: "roles_to_unmask", label: "Roles with Access", type: "array",
+            optional: true,
+            hint: "Roles that can see unmasked data" },
+          { name: "audit_access", label: "Audit Access", type: "boolean",
+            default: true,
+            hint: "Log when unmasked data is accessed" }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "masking_id", type: "integer" },
+          { name: "column_name" },
+          { name: "masking_type" },
+          { name: "created_at", type: "timestamp" }
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        call(:validate_table_id, input["table_id"])
+        
+        payload = {
+          column_name: input["column_name"],
+          masking_type: input["masking_type"],
+          roles_to_unmask: input["roles_to_unmask"],
+          audit_access: input["audit_access"]
+        }
+        payload[:masking_pattern] = input["masking_pattern"] if input["masking_pattern"].present?
+        
+        call(:with_rate_limit_retry, connection) do
+          post("/api/data_tables/#{input['table_id']}/field_masking").
+            payload(payload)
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to configure masking: #{e.message}")
+      end
+    },
+    
+    # Advanced Join Operations
+    join_tables: {
+      title: "Join tables",
+      subtitle: "Perform SQL-like joins between tables",
+      
+      input_fields: lambda do
+        [
+          { name: "left_table", label: "Left Table", type: "object", 
+            optional: false, properties: [
+              { name: "table_id", type: "integer", control_type: "select",
+                pick_list: "tables" },
+              { name: "alias", optional: true },
+              { name: "columns", type: "array", optional: true,
+                hint: "Columns to select from left table" }
+            ]},
+          { name: "right_table", label: "Right Table", type: "object",
+            optional: false, properties: [
+              { name: "table_id", type: "integer", control_type: "select",
+                pick_list: "tables" },
+              { name: "alias", optional: true },
+              { name: "columns", type: "array", optional: true,
+                hint: "Columns to select from right table" }
+            ]},
+          { name: "join_type", label: "Join Type", control_type: "select",
+            pick_list: [
+              ["Inner Join", "inner"],
+              ["Left Join", "left"],
+              ["Right Join", "right"],
+              ["Full Outer Join", "full"],
+              ["Cross Join", "cross"]
+            ], default: "inner" },
+          { name: "join_condition", label: "Join Condition", optional: false,
+            hint: "Join condition (e.g., left.id = right.user_id)" },
+          { name: "where_clause", label: "Where Clause", optional: true },
+          { name: "group_by", label: "Group By", type: "array", optional: true },
+          { name: "order_by", label: "Order By", type: "array", optional: true },
+          { name: "limit", type: "integer", default: 100 },
+          { name: "offset", type: "integer", default: 0 }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "results", type: "array", of: "object" },
+          { name: "row_count", type: "integer" },
+          { name: "execution_time_ms", type: "integer" }
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        payload = {
+          left_table: input["left_table"],
+          right_table: input["right_table"],
+          join_type: input["join_type"],
+          join_condition: input["join_condition"],
+          where_clause: input["where_clause"],
+          group_by: input["group_by"],
+          order_by: input["order_by"],
+          limit: input["limit"],
+          offset: input["offset"]
+        }
+        
+        call(:with_rate_limit_retry, connection) do
+          response = post("/api/data_tables/join").payload(payload)
+          
+          {
+            results: response["results"],
+            row_count: response["row_count"],
+            execution_time_ms: response["execution_time_ms"]
+          }
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to join tables: #{e.message}")
+      end
+    },
+    
+    # Data Type Conversion
+    convert_column_type: {
+      title: "Convert column data type",
+      subtitle: "Change the data type of an existing column",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "column_name", label: "Column Name", optional: false,
+            control_type: "select", pick_list: "table_columns",
+            pick_list_params: { table_id: "table_id" } },
+          { name: "new_type", label: "New Data Type", control_type: "select",
+            pick_list: [
+              ["String", "string"],
+              ["Integer", "integer"],
+              ["Decimal", "decimal"],
+              ["Boolean", "boolean"],
+              ["Datetime", "datetime"],
+              ["Text", "text"],
+              ["JSON", "json"]
+            ], optional: false },
+          { name: "conversion_rule", label: "Conversion Rule", 
+            control_type: "select",
+            pick_list: [
+              ["Auto Convert", "auto"],
+              ["Cast", "cast"],
+              ["Parse", "parse"],
+              ["Custom Function", "custom"]
+            ], default: "auto" },
+          { name: "custom_function", label: "Custom Conversion Function",
+            optional: true,
+            hint: "Custom SQL function for conversion",
+            ngIf: "input.conversion_rule == 'custom'" },
+          { name: "handle_errors", label: "Error Handling", 
+            control_type: "select",
+            pick_list: [
+              ["Fail on Error", "fail"],
+              ["Set to Null", "null"],
+              ["Use Default", "default"]
+            ], default: "fail" },
+          { name: "default_value", label: "Default Value for Errors",
+            optional: true,
+            ngIf: "input.handle_errors == 'default'" }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "success", type: "boolean" },
+          { name: "rows_converted", type: "integer" },
+          { name: "errors", type: "array", of: "object" }
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        call(:validate_table_id, input["table_id"])
+        
+        payload = {
+          column_name: input["column_name"],
+          new_type: input["new_type"],
+          conversion_rule: input["conversion_rule"],
+          handle_errors: input["handle_errors"]
+        }
+        payload[:custom_function] = input["custom_function"] if input["custom_function"].present?
+        payload[:default_value] = input["default_value"] if input["default_value"].present?
+        
+        call(:with_rate_limit_retry, connection) do
+          response = put("/api/data_tables/#{input['table_id']}/columns/#{input['column_name']}/convert").
+            payload(payload)
+          
+          {
+            success: response["success"],
+            rows_converted: response["rows_converted"],
+            errors: response["errors"] || []
+          }
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to convert column type: #{e.message}")
+      end
+    },
+    
+    # Table Partitioning
+    partition_table: {
+      title: "Partition table",
+      subtitle: "Create partitions for large tables",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "partition_type", label: "Partition Type", 
+            control_type: "select",
+            pick_list: [
+              ["Range", "range"],
+              ["List", "list"],
+              ["Hash", "hash"],
+              ["Date/Time", "datetime"]
+            ], optional: false },
+          { name: "partition_column", label: "Partition Column", 
+            optional: false,
+            control_type: "select", pick_list: "table_columns",
+            pick_list_params: { table_id: "table_id" } },
+          { name: "partition_count", label: "Number of Partitions",
+            type: "integer", optional: true,
+            hint: "For hash partitioning",
+            ngIf: "input.partition_type == 'hash'" },
+          { name: "partition_interval", label: "Partition Interval",
+            control_type: "select",
+            pick_list: [
+              ["Daily", "day"],
+              ["Weekly", "week"],
+              ["Monthly", "month"],
+              ["Yearly", "year"]
+            ],
+            ngIf: "input.partition_type == 'datetime'" },
+          { name: "partition_ranges", label: "Partition Ranges",
+            type: "array", of: "object", optional: true,
+            properties: [
+              { name: "name", label: "Partition Name" },
+              { name: "from_value", label: "From Value" },
+              { name: "to_value", label: "To Value" }
+            ],
+            ngIf: "input.partition_type == 'range'" }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "success", type: "boolean" },
+          { name: "partitions_created", type: "integer" },
+          { name: "partition_info", type: "array", of: "object" }
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        call(:validate_table_id, input["table_id"])
+        
+        payload = {
+          partition_type: input["partition_type"],
+          partition_column: input["partition_column"]
+        }
+        
+        case input["partition_type"]
+        when "hash"
+          payload[:partition_count] = input["partition_count"]
+        when "datetime"
+          payload[:partition_interval] = input["partition_interval"]
+        when "range"
+          payload[:partition_ranges] = input["partition_ranges"]
+        end
+        
+        call(:with_rate_limit_retry, connection) do
+          response = post("/api/data_tables/#{input['table_id']}/partition").
+            payload(payload)
+          
+          {
+            success: true,
+            partitions_created: response["partitions_created"],
+            partition_info: response["partition_info"]
+          }
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to partition table: #{e.message}")
+      end
+    },
+    
+    # Index Management
+    create_index: {
+      title: "Create table index",
+      subtitle: "Create an index to improve query performance",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "index_name", label: "Index Name", optional: false },
+          { name: "columns", label: "Columns", type: "array", of: "object",
+            optional: false, properties: [
+              { name: "column_name", label: "Column Name" },
+              { name: "sort_order", label: "Sort Order", 
+                control_type: "select",
+                pick_list: [["Ascending", "asc"], ["Descending", "desc"]],
+                default: "asc" }
+            ]},
+          { name: "index_type", label: "Index Type", control_type: "select",
+            pick_list: [
+              ["B-Tree", "btree"],
+              ["Hash", "hash"],
+              ["GiST", "gist"],
+              ["GIN", "gin"],
+              ["Full Text", "fulltext"]
+            ], default: "btree" },
+          { name: "unique", label: "Unique Index", type: "boolean",
+            default: false },
+          { name: "where_clause", label: "Partial Index Condition",
+            optional: true,
+            hint: "Create partial index with WHERE condition" }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "index_id", type: "integer" },
+          { name: "index_name" },
+          { name: "created_at", type: "timestamp" }
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        call(:validate_table_id, input["table_id"])
+        
+        payload = {
+          index_name: input["index_name"],
+          columns: input["columns"],
+          index_type: input["index_type"],
+          unique: input["unique"]
+        }
+        payload[:where_clause] = input["where_clause"] if input["where_clause"].present?
+        
+        call(:with_rate_limit_retry, connection) do
+          post("/api/data_tables/#{input['table_id']}/indexes").
+            payload(payload)
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to create index: #{e.message}")
+      end
+    },
+    
+    # Performance Analysis
+    analyze_table_performance: {
+      title: "Analyze table performance",
+      subtitle: "Get performance metrics and optimization suggestions",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "analysis_type", label: "Analysis Type", 
+            control_type: "select",
+            pick_list: [
+              ["Full Analysis", "full"],
+              ["Query Performance", "queries"],
+              ["Index Usage", "indexes"],
+              ["Storage Statistics", "storage"],
+              ["Access Patterns", "access"]
+            ], default: "full" },
+          { name: "time_range", label: "Time Range", control_type: "select",
+            pick_list: [
+              ["Last Hour", "1h"],
+              ["Last 24 Hours", "24h"],
+              ["Last 7 Days", "7d"],
+              ["Last 30 Days", "30d"]
+            ], default: "24h" }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "table_stats", type: "object", properties: [
+            { name: "row_count", type: "integer" },
+            { name: "table_size_mb", type: "decimal" },
+            { name: "index_size_mb", type: "decimal" },
+            { name: "last_vacuum", type: "timestamp" },
+            { name: "last_analyze", type: "timestamp" }
+          ]},
+          { name: "performance_metrics", type: "object", properties: [
+            { name: "avg_query_time_ms", type: "decimal" },
+            { name: "slow_queries", type: "integer" },
+            { name: "cache_hit_ratio", type: "decimal" },
+            { name: "index_hit_ratio", type: "decimal" }
+          ]},
+          { name: "recommendations", type: "array", of: "object", properties: [
+            { name: "priority", label: "Priority Level" },
+            { name: "type", label: "Recommendation Type" },
+            { name: "description" },
+            { name: "estimated_improvement" }
+          ]}
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        call(:validate_table_id, input["table_id"])
+        
+        params = {
+          analysis_type: input["analysis_type"],
+          time_range: input["time_range"]
+        }
+        
+        call(:with_rate_limit_retry, connection) do
+          get("/api/data_tables/#{input['table_id']}/performance").
+            params(params)
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to analyze performance: #{e.message}")
+      end
+    },
+    
+    # Backup and Restore
+    backup_table: {
+      title: "Backup table",
+      subtitle: "Create a backup of table data and schema",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "backup_name", label: "Backup Name", optional: false },
+          { name: "backup_type", label: "Backup Type", control_type: "select",
+            pick_list: [
+              ["Full Backup", "full"],
+              ["Schema Only", "schema"],
+              ["Data Only", "data"],
+              ["Incremental", "incremental"]
+            ], default: "full" },
+          { name: "compression", label: "Enable Compression", 
+            type: "boolean", default: true },
+          { name: "encryption", label: "Enable Encryption",
+            type: "boolean", default: false },
+          { name: "retention_days", label: "Retention Days",
+            type: "integer", default: 30,
+            hint: "Number of days to retain backup" }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "backup_id", type: "integer" },
+          { name: "backup_url" },
+          { name: "backup_size_mb", type: "decimal" },
+          { name: "created_at", type: "timestamp" },
+          { name: "expires_at", type: "timestamp" }
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        call(:validate_table_id, input["table_id"])
+        
+        payload = {
+          backup_name: input["backup_name"],
+          backup_type: input["backup_type"],
+          compression: input["compression"],
+          encryption: input["encryption"],
+          retention_days: input["retention_days"]
+        }
+        
+        call(:with_rate_limit_retry, connection) do
+          post("/api/data_tables/#{input['table_id']}/backup").
+            payload(payload)
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to create backup: #{e.message}")
+      end
+    },
+    
+    restore_table: {
+      title: "Restore table from backup",
+      subtitle: "Restore table data and schema from a backup",
+      
+      input_fields: lambda do
+        [
+          { name: "backup_id", label: "Backup ID", type: "integer",
+            optional: false },
+          { name: "target_table_name", label: "Target Table Name",
+            optional: false,
+            hint: "Name for restored table (can be different from original)" },
+          { name: "restore_type", label: "Restore Type", 
+            control_type: "select",
+            pick_list: [
+              ["Full Restore", "full"],
+              ["Schema Only", "schema"],
+              ["Data Only", "data"]
+            ], default: "full" },
+          { name: "overwrite_existing", label: "Overwrite Existing Table",
+            type: "boolean", default: false }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "table_id", type: "integer" },
+          { name: "table_name" },
+          { name: "rows_restored", type: "integer" },
+          { name: "restored_at", type: "timestamp" }
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        payload = {
+          backup_id: input["backup_id"],
+          target_table_name: input["target_table_name"],
+          restore_type: input["restore_type"],
+          overwrite_existing: input["overwrite_existing"]
+        }
+        
+        call(:with_rate_limit_retry, connection) do
+          post("/api/data_tables/restore").payload(payload)
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to restore table: #{e.message}")
+      end
+    },
+    
+    # Data Validation Rules
+    create_validation_rule: {
+      title: "Create validation rule",
+      subtitle: "Add data validation rules to a table",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "rule_name", label: "Rule Name", optional: false },
+          { name: "rule_type", label: "Rule Type", control_type: "select",
+            pick_list: [
+              ["Check Constraint", "check"],
+              ["Regex Pattern", "regex"],
+              ["Range", "range"],
+              ["List of Values", "enum"],
+              ["Custom Function", "custom"]
+            ], optional: false },
+          { name: "columns", label: "Apply to Columns", type: "array",
+            optional: false,
+            hint: "Columns this rule applies to" },
+          { name: "rule_expression", label: "Rule Expression", 
+            optional: false,
+            hint: "Validation expression or pattern" },
+          { name: "error_message", label: "Error Message",
+            optional: true,
+            hint: "Custom error message when validation fails" },
+          { name: "severity", label: "Severity", control_type: "select",
+            pick_list: [
+              ["Error", "error"],
+              ["Warning", "warning"],
+              ["Info", "info"]
+            ], default: "error" }
+        ]
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "rule_id", type: "integer" },
+          { name: "created_at", type: "timestamp" },
+          { name: "enabled", type: "boolean" }
+        ]
+      end,
+      
+      execute: lambda do |connection, input|
+        call(:validate_table_id, input["table_id"])
+        
+        payload = {
+          rule_name: input["rule_name"],
+          rule_type: input["rule_type"],
+          columns: input["columns"],
+          rule_expression: input["rule_expression"],
+          error_message: input["error_message"],
+          severity: input["severity"]
+        }
+        
+        call(:with_rate_limit_retry, connection) do
+          post("/api/data_tables/#{input['table_id']}/validation_rules").
+            payload(payload)
+        end
+      rescue RestClient::Exception => e
+        call(:handle_api_errors, e.response)
+        error("Failed to create validation rule: #{e.message}")
+      end
     }
   },
   
@@ -1230,7 +2034,7 @@
   # TRIGGERS
   # ==========================================
   triggers: {
-    # IMPROVEMENT 5: Webhook-based triggers
+    # Webhook-based triggers
     new_row_webhook: {
       title: "New row (Webhook)",
       subtitle: "Triggers instantly when a new row is added",
