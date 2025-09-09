@@ -11,33 +11,23 @@
         label: "Environment",
         control_type: "select",
         pick_list: [
-          ["Production", "app"],
-          ["EU Region", "app.eu"]
+          ["US (www.workato.com)", "www"],
+          ["EU (app.eu.workato.com)", "app.eu"],
+          ["JP (app.jp.workato.com)", "app.jp"],
+          ["SG (app.sg.workato.com)", "app.sg"],
+          ["AU (app.au.workato.com)", "app.au"],
+          ["IL (app.il.workato.com)", "app.il"]
         ],
         default: "app.eu",
         optional: false,
-        hint: "Select your Workato environment region"
-      },
-      {
-        name: "auth_type",
-        label: "Authentication Type",
-        control_type: "select",
-        pick_list: [
-          ["API Token", "api_token"],
-          ["OAuth 2.0", "oauth2"]
-        ],
-        default: "api_token",
-        optional: false,
-        hint: "Choose between API Token (simpler) or OAuth 2.0 (more secure)"
+        hint: "Select your Workato environment region (default is EU)"
       },
       {
         name: "api_token",
         label: "API Token",
         control_type: "password",
         optional: true,
-        hint: "Your Workato API token (found in Account Settings > API Tokens)",
-        # ngIf: "input.auth_type == 'api_token'" # << this is not correct
-        ngIf: "input['auth_type'] == 'api_token'" # but this is
+        hint: "Workspace admin → API clients → API keys (Bearer token)"
       },
       {
         name: "client_id",
@@ -47,22 +37,6 @@
         hint: "OAuth Client ID from API Platform settings",
         # ngIf: "input.auth_type == 'oauth2'"
         ngIf: "input['auth_type'] == 'oauth2'"
-      },
-      {
-        name: "client_secret",
-        label: "Client Secret", 
-        control_type: "password",
-        optional: true,
-        hint: "OAuth Client Secret (only shown once when creating API client)",
-        ngIf: "input['auth_type'] == 'oauth2'"
-      },
-      {
-        name: "email",
-        label: "Account Email",
-        control_type: "text",
-        optional: true,
-        hint: "Your Workato account email (required for API token auth)",
-        ngIf: "input['auth_type'] == 'api_token'"
       },
       {
         name: "enable_retry",
@@ -80,7 +54,6 @@
         default: 3,
         optional: true,
         hint: "Maximum number of retry attempts",
-        #ngIf: "input.enable_retry == true"
         ngIf: "input['enable_retry'] == true"
       }
     ],
@@ -88,7 +61,12 @@
     authorization: {
       type: "custom_auth",
       apply: lambda do |connection|
-        headers("Authorization": "Bearer #{connection['api_token']}")
+        headers(
+          "Authorization": "Bearer #{connection['api_token']}",
+          "Accept": "application/json"
+        )
+        # Optional but very useful for tracing:
+        headers("x-correlation-id": (connection['x_cid'] || SecureRandom.uuid))
       end
     },
     
@@ -101,9 +79,13 @@
   # TEST CONNECTION
   # ==========================================
   test: lambda do |_connection|
-    # Minimal, stable endpoints only
     me = get("/api/users/me")
-    tables = get("/api/data_tables").params(page: 1, per_page: 1)
+    # Only touch data tables if your API client role actually has access:
+    begin
+      tables = get("/api/data_tables").params(page: 1, per_page: 1)
+    rescue RestClient::Forbidden
+      tables = { "data" => [] } # valid connection, limited scope
+    end
 
     {
       success: true,
@@ -112,7 +94,11 @@
       sample_table_count: (tables["data"] || []).length
     }
   rescue RestClient::ExceptionWithResponse => e
-    error("Test failed (#{e.http_code}): #{e.response&.body || e.message}")
+    # Bubble up HTTP code + key headers devs need to see
+    hdrs = e.response&.headers || {}
+    auth_hdr = hdrs["www-authenticate"] || hdrs[:www_authenticate]
+    cid = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
+    error("Test failed (#{e.http_code}) auth=#{auth_hdr} cid=#{cid} url=#{e.response&.request&.url}")
   rescue => e
     error("Test failed: #{e.message}")
   end,
@@ -164,7 +150,8 @@
     # Input Validation
     validate_table_id: lambda do |table_id|
       error("Table ID is required") if table_id.blank?
-      error("Table ID must be a positive integer") unless table_id.to_i > 0
+      uuid = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
+      error("Table ID must be a UUID") unless table_id.to_s.match?(uuid)
     end,
     
     validate_row_data: lambda do |row_data, table|
@@ -208,19 +195,18 @@
       all_results = []
       params[:limit] ||= 100
       params[:offset] = 0
-      
+
       loop do
         response = call(:execute_with_retry, connection) { get(url).params(params) }
         rows = response["rows"] || response["records"] || response["data"] || []
+        all_results.concat(rows)
 
         has_more = response["has_more"] || (rows.length == params[:limit])
         break unless has_more
         params[:offset] += params[:limit]
-        
-        # Prevent infinite loops
         break if params[:offset] > 10000
       end
-      
+
       all_results
     end,
     
@@ -900,7 +886,7 @@
           begin
             url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{rid}"
             resp = call(:execute_with_retry, connection) { delete(url) }
-            { status: resp.dig("data", "status") || 200 }
+            successes << { record_id: rid, status: resp.dig("data","status") || 200 }
 
           rescue RestClient::ExceptionWithResponse => e
             errors << call(:make_error_hash, idx, rid, e)
