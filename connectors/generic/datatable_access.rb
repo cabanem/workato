@@ -417,7 +417,7 @@
   # ACTIONS
   # ==========================================
   actions: {
-    # ==== TABLES (Developer API) ===
+    # ---------- TABLES (Developer API) ----------
     # Create Table
     create_table: {
       title: "Create data table",
@@ -504,19 +504,124 @@
         put("/api/data_tables/#{input['table_id']}").payload(body)
       end
     },
-    # Truncate table (keep schema, clear rows) ::TODO::@cabanem
-    # - API: POST /api/data_tables/:data_table_id/truncate
-    
-    # Move table to folder/rename table ::TODO::@cabanem
-    # - API: PUT /api/data_tables/:data_table_id
-    
-    # List folders/list projects ::TODO::@cabanem
-    # - API: GET /api/folders && GET /api/projects 
-    
-    # Create a folder ::TODO::@cabanem
-    # - API: POST /api/folders
+    # Truncate table (keep schema, clear rows) 
+    truncate_table: {
+      title: "Truncate data table",
+      subtitle: "Remove all records, keep schema",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "confirm", type: "boolean", optional: false,
+            hint: "Set to true to confirm truncation" }
+        ]
+      end,
+      output_fields: lambda do
+        [
+          { name: "success", type: "boolean" },
+          { name: "truncated_at", type: "timestamp" }
+        ]
+      end,
+      execute: lambda do |_connection, input|
+        error("Truncation not confirmed") unless input["confirm"] == true
+        post("/api/data_tables/#{input['table_id']}/truncate")
+        { success: true, truncated_at: Time.now.iso8601 }
+      rescue RestClient::ExceptionWithResponse => e
+        error("Failed to truncate: #{e.response&.body || e.message}")
+      end
+    },
+    # Move table to folder/rename table 
+    move_or_rename_table: {
+      title: "Move/rename data table",
+      subtitle: "Change folder and/or name",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "name", optional: true },
+          { name: "folder_id", optional: true, control_type: "select", pick_list: "folders" }
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        { name: "data", type: "object", properties: object_definitions["table"] }
+      end,
+      execute: lambda do |_connection, input|
+        body = {}
+        body[:name] = input["name"] if input["name"].present?
+        body[:folder_id] = input["folder_id"] if input["folder_id"].present?
+        error("Provide at least one of name/folder_id") if body.empty?
 
-    # === RECORDS ===
+        put("/api/data_tables/#{input['table_id']}").payload(body)
+      rescue RestClient::ExceptionWithResponse => e
+        error("Failed to move/rename: #{e.response&.body || e.message}")
+      end
+    },
+
+    # List folders/list projects
+    list_folders: {
+      title: "List folders",
+      input_fields: lambda do
+        [
+          { name: "parent_id", optional: true },
+          { name: "page", type: "integer", default: 1 },
+          { name: "per_page", type: "integer", default: 100 }
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "data", type: "array", of: "object", properties: object_definitions["folder"] }
+        ]
+      end,
+      execute: lambda do |_connection, input|
+        params = { page: input["page"] || 1, per_page: input["per_page"] || 100 }
+        params[:parent_id] = input["parent_id"] if input["parent_id"].present?
+        get("/api/folders").params(params)
+      rescue RestClient::ExceptionWithResponse => e
+        error("Failed to list folders: #{e.response&.body || e.message}")
+      end
+    },
+    # Create a folder 
+    list_projects: {
+      title: "List projects",
+      input_fields: lambda do
+        [
+          { name: "page", type: "integer", default: 1 },
+          { name: "per_page", type: "integer", default: 100 }
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "data", type: "array", of: "object", properties: object_definitions["project"] }
+        ]
+      end,
+      execute: lambda do |_connection, input|
+        get("/api/projects").params(page: input["page"] || 1, per_page: input["per_page"] || 100)
+      rescue RestClient::ExceptionWithResponse => e
+        error("Failed to list projects: #{e.response&.body || e.message}")
+      end
+    },
+    create_folder: {
+      title: "Create folder",
+      input_fields: lambda do
+        [
+          { name: "name", optional: false },
+          { name: "parent_id", optional: true, control_type: "select", pick_list: "folders" },
+          { name: "project_id", optional: true, control_type: "select", pick_list: "projects",
+            hint: "If your account organizes folders under projects" }
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        { name: "data", type: "object", properties: object_definitions["folder"] }
+      end,
+      execute: lambda do |_connection, input|
+        payload = { name: input["name"] }
+        payload[:parent_id] = input["parent_id"] if input["parent_id"].present?
+        payload[:project_id] = input["project_id"] if input["project_id"].present?
+        post("/api/folders").payload(payload)
+      rescue RestClient::ExceptionWithResponse => e
+        error("Failed to create folder: #{e.response&.body || e.message}")
+      end
+    },
+
+    # ---------- RECORDS (Data Tables API v1 on global host) ----------
     query_records: {
       title: "Query records (v1)",
       input_fields: lambda do
@@ -592,7 +697,6 @@
         end
       end
     },
-
     create_record: {
       title: "Create record (v1)",
       input_fields: lambda do
@@ -622,7 +726,6 @@
         }
       end
     },
-
     update_record: {
       title: "Update record (v1)",
       input_fields: lambda do
@@ -643,7 +746,6 @@
         call(:execute_with_retry, connection) { put(url).payload(input["data"]) }
       end
     },
-
     delete_record: {
       title: "Delete record",
       input_fields: lambda do
@@ -664,28 +766,210 @@
         # Some replies return { data: { status: 200 } }
         { status: resp.dig("data","status") || 200 }
       end
-    }
+    },
     # -- Batch --
-    # Batch create ::TODO::@cabanem
-    # - input:  array of payloads
-    # - output: success, per-item errors)
-    # - useful: eliminates loops in recipes; you can add concurrency and partial‑failure reporting
-    
-    # Batch update ::TODO::@cabanem
-    # - input: list of {record_id, data}
-    # - iterate PUT /records/:record_id
-    # - useful: bulk corrections, migrations
-    
-    # Batch delete ::TODO::@cabanem
-    # - input: list of record IDs
-    # iterate DELETE /records/:record_id
-    # - useful: predictable cleanups w/guardrails
-    
-    # -- Query UX --
-    # Query (paged) + get next page (for each) ::TODO::@cabanem
-    # - first action returns 'continuation_token',
-    # - second accepts token to fetch next slice 
-    
+    batch_create_records: {
+      title: "Batch create records",
+      subtitle: "Create multiple records sequentially with per-item error capture",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "records", type: "array", of: "object", optional: false, properties: [
+            { name: "data", type: "object", optional: false,
+              hint: "Field map (field name or UUID → value)" }
+          ] }
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        object_definitions["batch_result"]
+      end,
+      execute: lambda do |connection, input|
+        base = call(:records_base, connection)
+        url = "#{base}/api/v1/tables/#{input['table_id']}/records"
+
+        successes = []
+        errors = []
+
+        (input["records"] || []).each_with_index do |rec, idx|
+          begin
+            res = call(:execute_with_retry, connection) { post(url).payload(rec["data"]) }
+            successes << (res.is_a?(Array) ? res.first : res)
+          rescue RestClient::ExceptionWithResponse => e
+            errors << call(:make_error_hash, idx, nil, e)
+          rescue => e
+            errors << call(:make_error_hash, idx, nil, e)
+          end
+        end
+
+        {
+          success_count: successes.length,
+          error_count: errors.length,
+          results: successes,
+          errors: errors
+        }
+      end
+    },
+    batch_update_records: {
+      title: "Batch update records",
+      subtitle: "Update multiple records sequentially with per-item error capture",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "updates", type: "array", of: "object", optional: false, properties: [
+            { name: "record_id", optional: false },
+            { name: "data", type: "object", optional: false }
+          ] }
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        object_definitions["batch_result"]
+      end,
+      execute: lambda do |connection, input|
+        base = call(:records_base, connection)
+
+        successes = []
+        errors = []
+
+        (input["updates"] || []).each_with_index do |u, idx|
+          begin
+            url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{u['record_id']}"
+            res = call(:execute_with_retry, connection) { put(url).payload(u["data"]) }
+            successes << res
+          rescue RestClient::ExceptionWithResponse => e
+            errors << call(:make_error_hash, idx, u["record_id"], e)
+          rescue => e
+            errors << call(:make_error_hash, idx, u["record_id"], e)
+          end
+        end
+
+        {
+          success_count: successes.length,
+          error_count: errors.length,
+          results: successes,
+          errors: errors
+        }
+      end
+    },
+    batch_delete_records: {
+      title: "Batch delete records",
+      subtitle: "Delete multiple records sequentially with per-item error capture",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "record_ids", type: "array", of: "string", optional: false }
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        object_definitions["batch_result"]
+      end,
+      execute: lambda do |connection, input|
+        base = call(:records_base, connection)
+
+        successes = []
+        errors = []
+
+        (input["record_ids"] || []).each_with_index do |rid, idx|
+          begin
+            url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{rid}"
+            call(:execute_with_retry, connection) { delete(url) }
+            successes << { record_id: rid, status: 200 }
+          rescue RestClient::ExceptionWithResponse => e
+            errors << call(:make_error_hash, idx, rid, e)
+          rescue => e
+            errors << call(:make_error_hash, idx, rid, e)
+          end
+        end
+
+        {
+          success_count: successes.length,
+          error_count: errors.length,
+          results: successes,
+          errors: errors
+        }
+      end
+    },
+    query_records_paged: {
+      title: "Query records (paged)",
+      subtitle: "Returns records and a continuation token for the next page",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "select", type: "array", optional: true },
+          { name: "filters", type: "object", optional: true, properties: [
+            { name: "operator", control_type: "select",
+              pick_list: [["AND","and"],["OR","or"]], default: "and" },
+            { name: "conditions", type: "array", of: "object", properties: [
+              { name: "column" },
+              { name: "operator", control_type: "select",
+                pick_list: [
+                  ["Equals","eq"],["Not equals","ne"],
+                  ["Greater than","gt"],["Less than","lt"],
+                  ["Greater or equal","gte"],["Less or equal","lte"],
+                  ["In list","in"],["Starts with","starts_with"]
+                ] },
+              { name: "value" }
+            ] }
+          ] },
+          { name: "order", type: "object", optional: true, properties: [
+            { name: "column" },
+            { name: "order", control_type: "select",
+              pick_list: [["Ascending","asc"],["Descending","desc"]], default: "asc" },
+            { name: "case_sensitive", type: "boolean", default: false }
+          ] },
+          { name: "limit", type: "integer", default: 100 },
+          { name: "timezone_offset_secs", type: "integer", optional: true }
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        object_definitions["records_result"]
+      end,
+      execute: lambda do |connection, input|
+        where = call(:build_where, input["filters"])
+        order = if input["order"].present? && input["order"]["column"].present?
+          { by: input["order"]["column"],
+            order: input["order"]["order"] || "asc",
+            case_sensitive: !!input["order"]["case_sensitive"] }
+        end
+
+        body = {
+          select: input["select"],
+          where: where,
+          order: order,
+          limit: input["limit"] || 100,
+          timezone_offset_secs: input["timezone_offset_secs"]
+        }.compact
+
+        resp = call(:records_query_call, connection, input["table_id"], body)
+        call(:normalize_records_result, connection, resp)
+      rescue RestClient::ExceptionWithResponse => e
+        error("Query failed: #{e.response&.body || e.message}")
+      end
+    },
+    query_records_next_page: {
+      title: "Query records – next page",
+      subtitle: "Use continuation token from the previous query",
+      input_fields: lambda do
+        [
+          { name: "table_id", optional: false, control_type: "select", pick_list: "tables" },
+          { name: "continuation_token", optional: false },
+          { name: "limit", type: "integer", optional: true }
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        object_definitions["records_result"]
+      end,
+      execute: lambda do |connection, input|
+        body = {
+          continuation_token: input["continuation_token"],
+          limit: input["limit"]
+        }.compact
+
+        resp = call(:records_query_call, connection, input["table_id"], body)
+        call(:normalize_records_result, connection, resp)
+      rescue RestClient::ExceptionWithResponse => e
+        error("Next page failed: #{e.response&.body || e.message}")
+      end
+    }
     # -- File Column --
     # Generate upload link
     # Attach uploaded file to record
