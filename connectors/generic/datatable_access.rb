@@ -312,12 +312,15 @@
 
     folders: lambda do |_connection|
       r = get("/api/folders").params(page: 1, per_page: 200)
-      (r["data"] || []).map { |f| [f["name"], f["id"]] }
+      arr = r.is_a?(Array) ? r : (r["data"] || [])
+      arr.map { |f| [f["name"] || f["id"].to_s, f["id"]] }
     end,
+
 
     projects: lambda do |_connection|
       r = get("/api/projects").params(page: 1, per_page: 200)
-      (r["data"] || []).map { |p| [p["name"], p["id"]] }
+      arr = r.is_a?(Array) ? r : (r["data"] || [])
+      arr.map { |p| [p["name"] || p["id"].to_s, p["id"]] }
     end
   },
 
@@ -325,29 +328,30 @@
   # OBJECT DEFINITIONS
   # ==========================================
   object_definitions: {
-    table: {
-      fields: lambda do |connection, config_fields|
-        [
-          { name: "id", type: "integer", label: "Table ID" },
-          { name: "name", label: "Table Name" },
-          { name: "description", label: "Description" },
-          { name: "schema_id", type: "integer", label: "Schema ID" },
-          { name: "schema", type: "array", of: "object", properties: [
-            { name: "type" },
-            { name: "name" },
-            { name: "optional", type: "boolean" },
-            { name: "field_id" },
-            { name: "hint" },
-            { name: "multivalue", type: "boolean" }
-          ]},
-          { name: "row_count", type: "integer", label: "Row Count" },
-          { name: "created_at", type: "timestamp", label: "Created At" },
-          { name: "updated_at", type: "timestamp", label: "Updated At" },
-          { name: "created_by", label: "Created By" },
-          { name: "metadata", type: "object", label: "Metadata" }
-        ]
-      end
-    },
+  table: {
+    fields: lambda do |_connection, _config_fields|
+      [
+        { name: "id", type: "string", label: "Table ID" }, # UUID string per docs
+        { name: "name", label: "Table Name" },
+        { name: "description", label: "Description" },
+        { name: "schema", type: "array", of: "object", properties: [
+          { name: "type" },
+          { name: "name" },
+          { name: "optional", type: "boolean" },
+          { name: "field_id" },
+          { name: "hint" },
+          { name: "multivalue", type: "boolean" },
+          { name: "metadata", type: "object" },
+          { name: "relation", type: "object", properties: [
+            { name: "table_id" }, { name: "field_id" }
+          ] }
+        ]},
+        { name: "folder_id", type: "integer", label: "Folder ID" },
+        { name: "created_at", type: "timestamp", label: "Created At" },
+        { name: "updated_at", type: "timestamp", label: "Updated At" }
+      ]
+    end
+  },
     
     column: {
       fields: lambda do |connection, config_fields|
@@ -389,6 +393,7 @@
           { name: "id" },
           { name: "name" },
           { name: "parent_id" },
+          { name: "is_project", type: "boolean" },
           { name: "project_id" },
           { name: "created_at", type: "timestamp" },
           { name: "updated_at", type: "timestamp" }
@@ -401,8 +406,8 @@
         [
           { name: "id" },
           { name: "name" },
-          { name: "created_at", type: "timestamp" },
-          { name: "updated_at", type: "timestamp" }
+          { name: "description" },
+          { name: "folder_id" }
         ]
       end
     },
@@ -583,14 +588,17 @@
         ]
       end,
       execute: lambda do |_connection, input|
-        params = { page: input["page"] || 1, per_page: input["per_page"] || 100 }
+        params = { page: (input["page"] || 1), per_page: (input["per_page"] || 100) }
         params[:parent_id] = input["parent_id"] if input["parent_id"].present?
-        get("/api/folders").params(params)
+
+        resp = get("/api/folders").params(params)
+
+        folders = resp.is_a?(Array) ? resp : (resp["data"] || [])
+        { "data" => folders }
       rescue RestClient::ExceptionWithResponse => e
         error("Failed to list folders: #{e.response&.body || e.message}")
       end
     },
-    # Create a folder 
     list_projects: {
       title: "List projects",
       input_fields: lambda do
@@ -605,7 +613,11 @@
         ]
       end,
       execute: lambda do |_connection, input|
-        get("/api/projects").params(page: input["page"] || 1, per_page: input["per_page"] || 100)
+        resp = get("/api/projects")
+                .params(page: (input["page"] || 1), per_page: (input["per_page"] || 100))
+
+        projects = resp.is_a?(Array) ? resp : (resp["data"] || [])
+        { "data" => projects }
       rescue RestClient::ExceptionWithResponse => e
         error("Failed to list projects: #{e.response&.body || e.message}")
       end
@@ -625,9 +637,12 @@
       end,
       execute: lambda do |_connection, input|
         payload = { name: input["name"] }
-        payload[:parent_id] = input["parent_id"] if input["parent_id"].present?
+        payload[:parent_id]  = input["parent_id"]  if input["parent_id"].present?
         payload[:project_id] = input["project_id"] if input["project_id"].present?
-        post("/api/folders").payload(payload)
+
+        resp = post("/api/folders").payload(payload)
+        data = resp.is_a?(Hash) ? resp : { "id" => resp }
+        { "data" => data }
       rescue RestClient::ExceptionWithResponse => e
         error("Failed to create folder: #{e.response&.body || e.message}")
       end
@@ -774,10 +789,16 @@
       end,
       execute: lambda do |connection, input|
         base = call(:records_base, connection)
-        url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{input['record_id']}"
+        url  = "#{base}/api/v1/tables/#{input['table_id']}/records/#{input['record_id']}"
         resp = call(:execute_with_retry, connection) { delete(url) }
-        # Some replies return { data: { status: 200 } }
-        { status: resp.dig("data","status") || 200 }
+
+        status = if resp.is_a?(Hash)
+                  resp.dig("data", "status") || resp["status"]
+                else
+                  nil
+                end
+
+        { status: status || 200 }
       end
     },
     # -- Batch --
