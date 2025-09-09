@@ -30,15 +30,6 @@
         hint: "Workspace admin → API clients → API keys (Bearer token)"
       },
       {
-        name: "client_id",
-        label: "Client ID",
-        control_type: "text",
-        optional: true,
-        hint: "OAuth Client ID from API Platform settings",
-        # ngIf: "input.auth_type == 'oauth2'"
-        ngIf: "input['auth_type'] == 'oauth2'"
-      },
-      {
         name: "enable_retry",
         label: "Enable Auto-Retry",
         control_type: "checkbox",
@@ -115,14 +106,29 @@
     # Hardened retry for 429
     execute_with_retry: lambda do |connection, &block|
       retries = 0
-      max_retries = (connection["max_retries"] || 3).to_i
+      max_retries = (connection["max_retries"] || 3).to_i.clamp(0, 6)
+
       begin
         block.call
       rescue RestClient::ExceptionWithResponse => e
         if e.http_code == 429 && connection["enable_retry"] && retries < max_retries
           hdrs = e.response&.headers || {}
-          ra = hdrs["Retry-After"] || hdrs[:retry_after] || 60
-          sleep(ra.to_i)
+          ra = hdrs["Retry-After"] || hdrs[:retry_after]
+          delay =
+            if ra.to_s =~ /^\d+$/ then ra.to_i
+            elsif ra.present?
+              begin
+                [(Time.httpdate(ra) - Time.now).ceil, 1].max
+              rescue
+                60
+              end
+            else
+              60
+            end
+
+          # backoff = max(server hint, 2^retries) + jitter(0..3)
+          backoff = [delay, (2 ** retries)].max + rand(0..3)
+          sleep(backoff)
           retries += 1
           retry
         end
@@ -170,22 +176,24 @@
     validate_field_type: lambda do |value, type, field_name|
       case type
       when "integer"
-        unless value.to_s.match?(/^\d+$/)
-          error("Field '#{field_name}' must be an integer")
-        end
-      when "decimal", "float"
-        unless value.to_s.match?(/^\d*\.?\d+$/)
-          error("Field '#{field_name}' must be a decimal number")
-        end
+        error("Field '#{field_name}' must be an integer") unless value.to_s.match?(/\A-?\d+\z/)
+      when "number"
+        error("Field '#{field_name}' must be a number") unless value.to_s.match?(/\A-?\d+(\.\d+)?\z/)
       when "boolean"
-        unless [true, false, "true", "false", 0, 1].include?(value)
+        unless [true, false, "true", "false", 0, 1, "0", "1"].include?(value)
           error("Field '#{field_name}' must be a boolean")
         end
-      when "datetime"
+      when "date_time"
         begin
           DateTime.parse(value.to_s)
         rescue
-          error("Field '#{field_name}' must be a valid datetime")
+          error("Field '#{field_name}' must be a valid date_time")
+        end
+      when "date"
+        begin
+          Date.parse(value.to_s)
+        rescue
+          error("Field '#{field_name}' must be a valid date")
         end
       end
     end,
@@ -248,15 +256,17 @@
         next nil unless c["column"].present? && c["operator"].present?
         oper = op_map[c["operator"]]
         next nil unless oper
+
         val = c["value"]
+        if c.key?("case_sensitive") && ["eq", "starts_with"].include?(c["operator"])
+          val = { "value" => val, "case_sensitive" => !!c["case_sensitive"] }
+        end
+
         { c["column"] => { oper => val } }
       end.compact
 
       return nil if conditions.empty?
-
       if conditions.length == 1 || (filters["operator"] || "and") == "and"
-        # shorthand AND allowed
-        # Merge when safe (single condition) otherwise wrap in $and
         return conditions.first if conditions.length == 1
         { "$and" => conditions }
       else
@@ -267,8 +277,9 @@
     # Try the canonical records query path, then the legacy one.
     records_query_call: lambda do |connection, table_id, body|
       base = call(:records_base, connection)
-      primary = "#{base}/api/v1/tables/#{table_id}/records/query"
-      fallback = "#{base}/api/v1/tables/#{table_id}/query"
+      primary  = "#{base}/api/v1/tables/#{table_id}/query"
+      fallback = "#{base}/api/v1/tables/#{table_id}/records/query"
+
       call(:execute_with_retry, connection) { post(primary).payload(body) }
     rescue RestClient::NotFound
       call(:execute_with_retry, connection) { post(fallback).payload(body) }
@@ -433,6 +444,10 @@
   # ==========================================
   # ACTIONS
   # ==========================================
+  # List responses
+  # - GET /api/projects → array at root
+  # - GET /api/folders → array at root
+  # - GET /api/data_tables → envelope { "data": [...] }
   actions: {
     # ---------- TABLES (Developer API) ----------
     # Create Table
@@ -572,7 +587,7 @@
       end
     },
 
-    # List folders/list projects
+    # ---------- Folders / Projects ----------
     list_folders: {
       title: "List folders",
       input_fields: lambda do
@@ -627,9 +642,8 @@
       input_fields: lambda do
         [
           { name: "name", optional: false },
-          { name: "parent_id", optional: true, control_type: "select", pick_list: "folders" },
-          { name: "project_id", optional: true, control_type: "select", pick_list: "projects",
-            hint: "If your account organizes folders under projects" }
+          { name: "parent_id", optional: true, control_type: "select", pick_list: "folders" }
+          # Removed project id input field, POST /api/folder does not have project_id param in payload
         ]
       end,
       output_fields: lambda do |object_definitions|
@@ -637,8 +651,7 @@
       end,
       execute: lambda do |_connection, input|
         payload = { name: input["name"] }
-        payload[:parent_id]  = input["parent_id"]  if input["parent_id"].present?
-        payload[:project_id] = input["project_id"] if input["project_id"].present?
+        payload[:parent_id] = input["parent_id"] if input["parent_id"].present?
 
         resp = post("/api/folders").payload(payload)
         data = resp.is_a?(Hash) ? resp : { "id" => resp }
@@ -686,9 +699,12 @@
         object_definitions["records_result"]
       end,
       execute: lambda do |connection, input|
+        call(:validate_table_id, input["table_id"])
+
         where = call(:build_where, input["filters"])
         order = if input["order"].present? && input["order"]["column"].present?
-                  { by: input["order"]["column"], order: input["order"]["order"] || "asc",
+                  { by: input["order"]["column"],
+                    order: input["order"]["order"] || "asc",
                     case_sensitive: !!input["order"]["case_sensitive"] }
                 end
 
@@ -701,29 +717,12 @@
           timezone_offset_secs: input["timezone_offset_secs"]
         }.compact
 
-        base = call(:records_base, connection)
-        primary = "#{base}/api/v1/tables/#{input['table_id']}/records/query"
-        fallback = "#{base}/api/v1/tables/#{input['table_id']}/query"
-
-        resp = nil
-        begin
-          resp = call(:execute_with_retry, connection) { post(primary).payload(body) }
-        rescue RestClient::NotFound
-          resp = call(:execute_with_retry, connection) { post(fallback).payload(body) }
-        end
-
-        if resp.is_a?(Hash)
-          {
-            records: resp["records"] || resp["data"] || [],
-            continuation_token: resp["continuation_token"]
-          }
-        else
-          { records: Array(resp || []), continuation_token: nil }
-        end
-
+        resp = call(:records_query_call, connection, input["table_id"], body)
+        call(:normalize_records_result, connection, resp)
       rescue RestClient::ExceptionWithResponse => e
         error("Query failed: #{e.response&.body || e.message}")
       end
+
     },
     create_record: {
       title: "Create record (v1)",
@@ -742,6 +741,9 @@
         ]
       end,
       execute: lambda do |connection, input|
+        # Validate table ID, fail fast if invalid
+        call(:validate_table_id, input["table_id"])
+
         base = call(:records_base, connection)
         url = "#{base}/api/v1/tables/#{input['table_id']}/records"
         result = call(:execute_with_retry, connection) { post(url).payload(input["data"]) }
@@ -769,6 +771,9 @@
         ]
       end,
       execute: lambda do |connection, input|
+        # Validate table ID, fail fast if invalid
+        call(:validate_table_id, input["table_id"])
+
         base = call(:records_base, connection)
         url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{input['record_id']}"
         call(:execute_with_retry, connection) { put(url).payload(input["data"]) }
@@ -788,6 +793,9 @@
         ]
       end,
       execute: lambda do |connection, input|
+        # Validate table ID, fail fast if invalid
+        call(:validate_table_id, input["table_id"])
+
         base = call(:records_base, connection)
         url  = "#{base}/api/v1/tables/#{input['table_id']}/records/#{input['record_id']}"
         resp = call(:execute_with_retry, connection) { delete(url) }
@@ -818,6 +826,9 @@
         object_definitions["batch_result"]
       end,
       execute: lambda do |connection, input|
+        # Validate table ID, fail fast if invalid
+        call(:validate_table_id, input["table_id"])
+
         base = call(:records_base, connection)
         url = "#{base}/api/v1/tables/#{input['table_id']}/records"
 
@@ -860,6 +871,9 @@
         object_definitions["batch_result"]
       end,
       execute: lambda do |connection, input|
+        # Validate table ID, fail fast if invalid
+        call(:validate_table_id, input["table_id"])
+
         base = call(:records_base, connection)
 
         successes = []
@@ -898,6 +912,9 @@
         object_definitions["batch_result"]
       end,
       execute: lambda do |connection, input|
+        # Validate table ID, fail fast if invalid
+        call(:validate_table_id, input["table_id"])
+
         base = call(:records_base, connection)
 
         successes = []
@@ -960,6 +977,9 @@
         object_definitions["records_result"]
       end,
       execute: lambda do |connection, input|
+        # Validate table ID, fail fast if invalid
+        call(:validate_table_id, input["table_id"])
+
         where = call(:build_where, input["filters"])
         order = if input["order"].present? && input["order"]["column"].present?
           { by: input["order"]["column"],
@@ -995,6 +1015,9 @@
         object_definitions["records_result"]
       end,
       execute: lambda do |connection, input|
+        # Validate table ID, fail fast if invalid
+        call(:validate_table_id, input["table_id"])
+
         body = {
           continuation_token: input["continuation_token"],
           limit: input["limit"]
