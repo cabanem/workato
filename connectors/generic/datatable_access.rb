@@ -12,11 +12,9 @@
         control_type: "select",
         pick_list: [
           ["Production", "app"],
-          ["EU Region", "app.eu"],
-          ["JP Region", "app.jp"],
-          ["SG Region", "app.sg"]
+          ["EU Region", "app.eu"]
         ],
-        default: "app",
+        default: "app.eu",
         optional: false,
         hint: "Select your Workato environment region"
       },
@@ -150,7 +148,7 @@
   },
   
   # ==========================================
-  # ENHANCED TEST CONNECTION
+  # TEST CONNECTION
   # ==========================================
   test: lambda do |connection|
     # Test basic connectivity
@@ -2214,7 +2212,7 @@
       end
     },
     
-    # Polling trigger (keeping the original with enhancements)
+    # Polling trigger 
     new_row_poll: {
       title: "New row (Polling)",
       subtitle: "Checks for new rows periodically",
@@ -2260,7 +2258,7 @@
       end
     },
 
-        # Scheduled Data Export
+    # Scheduled Data Export
     scheduled_export: {
       title: "Scheduled table export",
       subtitle: "Triggers on a schedule to export table data",
