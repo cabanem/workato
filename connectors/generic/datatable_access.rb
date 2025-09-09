@@ -2258,6 +2258,224 @@
       output_fields: lambda do |object_definitions|
         object_definitions["row"]
       end
+    },
+
+        # Scheduled Data Export
+    scheduled_export: {
+      title: "Scheduled table export",
+      subtitle: "Triggers on a schedule to export table data",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "schedule", label: "Schedule", control_type: "select",
+            pick_list: [
+              ["Every Hour", "hourly"],
+              ["Daily", "daily"],
+              ["Weekly", "weekly"],
+              ["Monthly", "monthly"]
+            ], optional: false },
+          { name: "export_format", label: "Export Format", 
+            control_type: "select",
+            pick_list: [["CSV", "csv"], ["JSON", "json"], ["Excel", "xlsx"]],
+            default: "csv" },
+          { name: "filter", label: "Export Filter", type: "object",
+            optional: true,
+            hint: "Filter data before export" }
+        ]
+      end,
+      
+      poll: lambda do |connection, input, last_poll|
+        # Check if it's time to export based on schedule
+        schedule_met = case input["schedule"]
+        when "hourly"
+          Time.now.min == 0
+        when "daily"
+          Time.now.hour == 0 && Time.now.min == 0
+        when "weekly"
+          Time.now.wday == 1 && Time.now.hour == 0
+        when "monthly"
+          Time.now.day == 1 && Time.now.hour == 0
+        end
+        
+        if schedule_met
+          response = call(:with_rate_limit_retry, connection) do
+            post("/api/data_tables/#{input['table_id']}/export").
+              payload(
+                format: input["export_format"],
+                filter: input["filter"]
+              )
+          end
+          
+          {
+            events: [response],
+            next_poll: Time.now
+          }
+        else
+          {
+            events: [],
+            next_poll: last_poll || Time.now
+          }
+        end
+      end,
+      
+      dedup: lambda do |export|
+        "#{export['table_id']}-#{export['created_at']}"
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "file_url" },
+          { name: "file_size", type: "integer" },
+          { name: "row_count", type: "integer" },
+          { name: "exported_at", type: "timestamp" }
+        ]
+      end
+    },
+    
+    # Data Quality Monitor
+    data_quality_alert: {
+      title: "Data quality alert",
+      subtitle: "Triggers when data quality issues are detected",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "quality_checks", label: "Quality Checks", 
+            type: "array", of: "object", properties: [
+              { name: "check_type", control_type: "select",
+                pick_list: [
+                  ["Null Values", "nulls"],
+                  ["Duplicates", "duplicates"],
+                  ["Data Type Mismatch", "type_mismatch"],
+                  ["Outliers", "outliers"],
+                  ["Missing Required", "missing_required"]
+                ]},
+              { name: "column" },
+              { name: "threshold", type: "decimal",
+                hint: "Alert threshold percentage" }
+            ]},
+          { name: "check_frequency", label: "Check Frequency",
+            control_type: "select",
+            pick_list: [
+              ["Every 5 minutes", "5m"],
+              ["Every 15 minutes", "15m"],
+              ["Every hour", "1h"],
+              ["Every day", "24h"]
+            ], default: "1h" }
+        ]
+      end,
+      
+      webhook_subscribe: lambda do |webhook_url, connection, input|
+        call(:validate_table_id, input["table_id"])
+        
+        post("/api/webhooks").payload(
+          url: webhook_url,
+          event: "data_table.quality.alert",
+          table_id: input["table_id"],
+          quality_checks: input["quality_checks"],
+          check_frequency: input["check_frequency"]
+        )
+      end,
+      
+      webhook_unsubscribe: lambda do |webhook, connection|
+        delete("/api/webhooks/#{webhook['id']}")
+      end,
+      
+      webhook_notification: lambda do |input, payload, extended_input_schema, extended_output_schema, headers, params|
+        payload
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "table_id", type: "integer" },
+          { name: "issues", type: "array", of: "object", properties: [
+            { name: "check_type" },
+            { name: "column" },
+            { name: "issue_count", type: "integer" },
+            { name: "percentage", type: "decimal" },
+            { name: "threshold_exceeded", type: "boolean" }
+          ]},
+          { name: "checked_at", type: "timestamp" }
+        ]
+      end
+    },
+
+    table_size_threshold: {
+      title: "Table size threshold",
+      subtitle: "Triggers when table exceeds size threshold",
+      
+      input_fields: lambda do
+        [
+          { name: "table_id", label: "Table ID", type: "integer",
+            optional: false, control_type: "select", pick_list: "tables" },
+          { name: "threshold_type", label: "Threshold Type",
+            control_type: "select",
+            pick_list: [
+              ["Row Count", "rows"],
+              ["Storage Size (MB)", "size_mb"],
+              ["Growth Rate (%)", "growth_rate"]
+            ], optional: false },
+          { name: "threshold_value", label: "Threshold Value",
+            type: "decimal", optional: false },
+          { name: "check_interval", label: "Check Interval",
+            control_type: "select",
+            pick_list: [
+              ["Every Hour", "1h"],
+              ["Every 6 Hours", "6h"],
+              ["Daily", "24h"]
+            ], default: "6h" }
+        ]
+      end,
+      
+      poll: lambda do |connection, input, last_poll|
+        table_stats = call(:with_rate_limit_retry, connection) do
+          get("/api/data_tables/#{input['table_id']}/stats")
+        end
+        
+        threshold_exceeded = case input["threshold_type"]
+        when "rows"
+          table_stats["row_count"] > input["threshold_value"]
+        when "size_mb"
+          table_stats["size_mb"] > input["threshold_value"]
+        when "growth_rate"
+          table_stats["growth_rate_percent"] > input["threshold_value"]
+        end
+        
+        if threshold_exceeded
+          {
+            events: [{
+              table_id: input["table_id"],
+              threshold_type: input["threshold_type"],
+              threshold_value: input["threshold_value"],
+              current_value: table_stats[input["threshold_type"]],
+              exceeded_at: Time.now.iso8601
+            }],
+            next_poll: Time.now
+          }
+        else
+          {
+            events: [],
+            next_poll: last_poll || Time.now
+          }
+        end
+      end,
+      
+      dedup: lambda do |event|
+        "#{event['table_id']}-#{event['exceeded_at']}"
+      end,
+      
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "table_id", type: "integer" },
+          { name: "threshold_type" },
+          { name: "threshold_value", type: "decimal" },
+          { name: "current_value", type: "decimal" },
+          { name: "exceeded_at", type: "timestamp" }
+        ]
+      end
     }
   }
 }
