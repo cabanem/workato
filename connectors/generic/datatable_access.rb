@@ -504,8 +504,17 @@
         put("/api/data_tables/#{input['table_id']}").payload(body)
       end
     },
-    # Truncate table (keep schema, clear rows), API: POST /api/data_tables/:data_table_id/truncate
-
+    # Truncate table (keep schema, clear rows) ::TODO::@cabanem
+    # - API: POST /api/data_tables/:data_table_id/truncate
+    
+    # Move table to folder/rename table ::TODO::@cabanem
+    # - API: PUT /api/data_tables/:data_table_id
+    
+    # List folders/list projects ::TODO::@cabanem
+    # - API: GET /api/folders && GET /api/projects 
+    
+    # Create a folder ::TODO::@cabanem
+    # - API: POST /api/folders
 
     # === RECORDS ===
     query_records: {
@@ -656,18 +665,31 @@
         { status: resp.dig("data","status") || 200 }
       end
     }
+    # -- Batch --
+    # Batch create ::TODO::@cabanem
+    # - input:  array of payloads
+    # - output: success, per-item errors)
+    # - useful: eliminates loops in recipes; you can add concurrency and partial‑failure reporting
+    
+    # Batch update ::TODO::@cabanem
+    # - input: list of {record_id, data}
+    # - iterate PUT /records/:record_id
+    # - useful: bulk corrections, migrations
+    
+    # Batch delete ::TODO::@cabanem
+    # - input: list of record IDs
+    # iterate DELETE /records/:record_id
+    # - useful: predictable cleanups w/guardrails
+    
+    # -- Query UX --
+    # Query (paged) + get next page (for each) ::TODO::@cabanem
+    # - first action returns 'continuation_token',
+    # - second accepts token to fetch next slice 
+    
+    # -- File Column --
+    # Generate upload link
+    # Attach uploaded file to record
+    # Generate download link for file field
+    # Download file content (streaming)
   }
-}
-
-
-      execute: lambda do |connection, input|
-        base = call(:records_base, connection)
-        url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{input['record_id']}"
-        resp = call(:execute_with_retry, connection) { delete(url) }
-        # Some replies return { data: { status: 200 } }
-        { status: resp.dig("data","status") || 200 }
-      end
-    }
-  }
-}
 }
