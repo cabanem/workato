@@ -364,7 +364,9 @@
   pick_lists: {
     tables: lambda do |connection|
       response = call(:execute_with_retry, connection, :get, "/api/data_tables")
-      response.pluck("name", "id").map { |name, id| [name, id] }
+      # the .pluck method isn't available in this context
+      # response.pluck("name", "id").map { |name, id| [name, id] }
+      response.map { |item| [item["name"], item["id"]] }
     end,
     
     table_columns: lambda do |connection, table_id:|
