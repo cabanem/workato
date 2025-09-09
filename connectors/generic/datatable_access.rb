@@ -88,51 +88,6 @@
     authorization: {
       type: "custom_auth",
       
-      acquire: lambda do |connection|
-        if connection["auth_type"] == "api_token"
-          {
-            api_token: connection["api_token"],
-            email: connection["email"]
-          }
-        else
-          # OAuth 2.0 flow
-          response = post("https://#{connection['environment']}.workato.com/oauth/token").
-            payload(
-              grant_type: "client_credentials",
-              client_id: connection["client_id"],
-              client_secret: connection["client_secret"]
-            ).
-            request_format_www_form_urlencoded
-          
-          {
-            access_token: response["access_token"],
-            token_type: response["token_type"],
-            expires_in: response["expires_in"],
-            refresh_token: response["refresh_token"]
-          }
-        end
-      end,
-      
-      refresh: lambda do |connection, refresh_token|
-        if connection["auth_type"] == "oauth2" && refresh_token.present?
-          response = post("https://#{connection['environment']}.workato.com/oauth/token").
-            payload(
-              grant_type: "refresh_token",
-              refresh_token: refresh_token,
-              client_id: connection["client_id"],
-              client_secret: connection["client_secret"]
-            ).
-            request_format_www_form_urlencoded
-          
-          {
-            access_token: response["access_token"],
-            token_type: response["token_type"],
-            expires_in: response["expires_in"],
-            refresh_token: response["refresh_token"]
-          }
-        end
-      end,
-      
       apply: lambda do |connection|
         headers("Authorization": "Bearer #{connection['api_token']}")
       end
