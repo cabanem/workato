@@ -2243,7 +2243,9 @@
       poll: lambda do |connection, input, last_poll|
         call(:validate_table_id, input["table_id"])
         
-        since = last_poll || input["since"] || 1.hour.ago
+        # Time methods aren't available in this contex
+        # since = last_poll || input["since"] || 1.hour.ago
+        since = last_poll || input["since"] || (Time.now - 3600).iso8601
         
         params = {
           filter: { created_at: { gt: since } }.to_json,
