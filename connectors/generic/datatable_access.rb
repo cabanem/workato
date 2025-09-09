@@ -292,6 +292,33 @@
       }
     end,
 
+    # Normalize list endpoints that sometimes return an array at root
+    normalize_list_response: lambda do |_connection, resp|
+      arr = resp.is_a?(Array) ? resp : (resp["data"] || resp["items"] || [])
+      { "data" => arr }
+    end,
+
+    # Clamp page/per_page to documented bounds (folders/projects: max 100)
+    clamp_pagination: lambda do |_connection, page, per_page, max|
+      page = (page || 1).to_i
+      per_page = (per_page || 100).to_i
+      per_page = 1 if per_page < 1
+      per_page = max if per_page > max
+      { page: page, per_page: per_page }
+    end,
+
+    # Unified GET list call with retry, pagination clamping, and helpful 403 error
+    list_index: lambda do |connection, path, params = {}|
+      p = call(:clamp_pagination, connection, params[:page], params[:per_page], 100)
+      q = params.merge(p).compact
+      resp = call(:execute_with_retry, connection) { get(path).params(q) }
+      call(:normalize_list_response, connection, resp)
+    rescue RestClient::Forbidden => e
+      hdrs = e.response&.headers || {}
+      cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
+      error("Permission denied for #{path}. Enable API client role privilege: Projects & folders → List folders/projects. cid=#{cid}")
+    end,
+
     # Uniform error object for batch ops
     make_error_hash: lambda do |_connection, idx, id, e|
       {
@@ -592,7 +619,8 @@
       title: "List folders",
       input_fields: lambda do
         [
-          { name: "parent_id", optional: true },
+          { name: "parent_id", optional: true, control_type: "select", pick_list: "folders",
+            hint: "Defaults to the Home folder when empty" },
           { name: "page", type: "integer", default: 1 },
           { name: "per_page", type: "integer", default: 100 }
         ]
@@ -602,16 +630,14 @@
           { name: "data", type: "array", of: "object", properties: object_definitions["folder"] }
         ]
       end,
-      execute: lambda do |_connection, input|
-        params = { page: (input["page"] || 1), per_page: (input["per_page"] || 100) }
+      execute: lambda do |connection, input|
+        params = { page: input["page"], per_page: input["per_page"] }
         params[:parent_id] = input["parent_id"] if input["parent_id"].present?
-
-        resp = get("/api/folders").params(params)
-
-        folders = resp.is_a?(Array) ? resp : (resp["data"] || [])
-        { "data" => folders }
+        call(:list_index, connection, "/api/folders", params)
       rescue RestClient::ExceptionWithResponse => e
-        error("Failed to list folders: #{e.response&.body || e.message}")
+        hdrs = e.response&.headers || {}
+        cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
+        error("Failed to list folders (#{e.http_code}). cid=#{cid} body=#{e.response&.body}")
       end
     },
     list_projects: {
@@ -627,14 +653,13 @@
           { name: "data", type: "array", of: "object", properties: object_definitions["project"] }
         ]
       end,
-      execute: lambda do |_connection, input|
-        resp = get("/api/projects")
-                .params(page: (input["page"] || 1), per_page: (input["per_page"] || 100))
-
-        projects = resp.is_a?(Array) ? resp : (resp["data"] || [])
-        { "data" => projects }
+      execute: lambda do |connection, input|
+        params = { page: input["page"], per_page: input["per_page"] }
+        call(:list_index, connection, "/api/projects", params)
       rescue RestClient::ExceptionWithResponse => e
-        error("Failed to list projects: #{e.response&.body || e.message}")
+        hdrs = e.response&.headers || {}
+        cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
+        error("Failed to list projects (#{e.http_code}). cid=#{cid} body=#{e.response&.body}")
       end
     },
     create_folder: {
