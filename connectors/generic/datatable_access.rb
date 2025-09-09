@@ -1,5 +1,5 @@
 {
-  title: "Workato Data Tables - Enhanced",
+  title: "Workato Data Tables",
   
   # ==========================================
   # CONNECTION CONFIGURATION
@@ -175,12 +175,89 @@
   rescue => e
     error("Connection test failed: #{e.message}")
   end,
-  
+
   # ==========================================
   # HELPER METHODS
   # ==========================================
   methods: {
-    #  Robust Error Handling
+    # Execute with retry logic for rate limiting
+    execute_with_retry: lambda do |connection, request_type, url, options = {}|
+      return_value = nil
+      
+      if connection["enable_retry"]
+        max_retries = connection["max_retries"] || 3
+        retries = 0
+        
+        begin
+          case request_type
+          when :get
+            return_value = if options[:params].present?
+              get(url).params(options[:params])
+            else
+              get(url)
+            end
+          when :post
+            return_value = if options[:payload].present?
+              post(url).payload(options[:payload])
+            else
+              post(url)
+            end
+          when :put
+            return_value = if options[:payload].present?
+              put(url).payload(options[:payload])
+            else
+              put(url)
+            end
+          when :delete
+            return_value = if options[:payload].present?
+              delete(url).payload(options[:payload])
+            else
+              delete(url)
+            end
+          end
+        rescue RestClient::TooManyRequests => e
+          if retries < max_retries
+            retry_after = e.response.headers[:retry_after].to_i || 60
+            sleep(retry_after)
+            retries += 1
+            retry
+          else
+            raise
+          end
+        end
+      else
+        case request_type
+        when :get
+          return_value = if options[:params].present?
+            get(url).params(options[:params])
+          else
+            get(url)
+          end
+        when :post
+          return_value = if options[:payload].present?
+            post(url).payload(options[:payload])
+          else
+            post(url)
+          end
+        when :put
+          return_value = if options[:payload].present?
+            put(url).payload(options[:payload])
+          else
+            put(url)
+          end
+        when :delete
+          return_value = if options[:payload].present?
+            delete(url).payload(options[:payload])
+          else
+            delete(url)
+          end
+        end
+      end
+      
+      return_value
+    end,
+    
+    # Robust Error Handling
     handle_api_errors: lambda do |response|
       case response.code
       when 404
@@ -194,27 +271,6 @@
         error("Bad request: #{response.body}")
       when 500..599
         error("Server error: #{response.message}")
-      end
-    end,
-    
-    # Rate Limiting Handler
-    with_rate_limit_retry: lambda do |connection, &block|
-      return yield unless connection["enable_retry"]
-      
-      max_retries = connection["max_retries"] || 3
-      retries = 0
-      
-      begin
-        yield
-      rescue RestClient::TooManyRequests => e
-        if retries < max_retries
-          retry_after = e.response.headers[:retry_after].to_i || 60
-          sleep(retry_after)
-          retries += 1
-          retry
-        else
-          raise
-        end
       end
     end,
     
@@ -269,7 +325,7 @@
       params[:offset] = 0
       
       loop do
-        response = get(url).params(params)
+        response = call(:execute_with_retry, connection, :get, url, params: params)
         all_results.concat(response["rows"])
         
         break unless response["has_more"]
@@ -307,19 +363,18 @@
   # ==========================================
   pick_lists: {
     tables: lambda do |connection|
-      get("/api/data_tables").
-        pluck("name", "id").
-        map { |name, id| [name, id] }
+      response = call(:execute_with_retry, connection, :get, "/api/data_tables")
+      response.pluck("name", "id").map { |name, id| [name, id] }
     end,
     
     table_columns: lambda do |connection, table_id:|
       return [] unless table_id.present?
       
-      schema = get("/api/data_tables/#{table_id}/schema")
+      schema = call(:execute_with_retry, connection, :get, "/api/data_tables/#{table_id}/schema")
       schema["columns"].map { |col| [col["name"], col["name"]] }
     end
   },
-  
+
   # ==========================================
   # OBJECT DEFINITIONS
   # ==========================================
@@ -365,7 +420,7 @@
       end
     }
   },
-  
+
   # ==========================================
   # ACTIONS
   # ==========================================
@@ -433,9 +488,7 @@
         }
         payload[:metadata] = input["metadata"] if input["metadata"].present?
         
-        call(:with_rate_limit_retry, connection) do
-          post("/api/data_tables").payload(payload)
-        end
+        call(:execute_with_retry, connection, :post, "/api/data_tables", payload: payload)
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to create table: #{e.message}")
@@ -473,9 +526,7 @@
           error("Deletion not confirmed. Set 'confirm' to true to delete the table.")
         end
         
-        call(:with_rate_limit_retry, connection) do
-          delete("/api/data_tables/#{input['table_id']}")
-        end
+        call(:execute_with_retry, connection, :delete, "/api/data_tables/#{input['table_id']}")
         
         {
           success: true,
@@ -531,13 +582,12 @@
         params[:include_metadata] = true if input["include_metadata"]
         params[:include_schema] = true if input["include_schema"]
         
-        call(:with_rate_limit_retry, connection) do
-          response = get("/api/data_tables").params(params)
-          { 
-            tables: response["tables"] || response,
-            total_count: response["total_count"] || response.length
-          }
-        end
+        response = call(:execute_with_retry, connection, :get, "/api/data_tables", params: params)
+        
+        { 
+          tables: response["tables"] || response,
+          total_count: response["total_count"] || response.length
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to list tables: #{e.message}")
@@ -569,9 +619,7 @@
       execute: lambda do |connection, input|
         call(:validate_table_id, input["table_id"])
         
-        call(:with_rate_limit_retry, connection) do
-          get("/api/data_tables/#{input['table_id']}/schema")
-        end
+        call(:execute_with_retry, connection, :get, "/api/data_tables/#{input['table_id']}/schema")
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to get schema: #{e.message}")
@@ -658,16 +706,15 @@
           params[:sort] = sort_parts.join(",")
         end
         
-        call(:with_rate_limit_retry, connection) do
-          response = get("/api/data_tables/#{input['table_id']}/rows").params(params)
-          
-          {
-            rows: response["rows"],
-            total_count: response["total"],
-            filtered_count: response["rows"].length,
-            has_more: response["has_more"]
-          }
-        end
+        response = call(:execute_with_retry, connection, :get, 
+                       "/api/data_tables/#{input['table_id']}/rows", params: params)
+        
+        {
+          rows: response["rows"],
+          total_count: response["total"],
+          filtered_count: response["rows"].length,
+          has_more: response["has_more"]
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to search rows: #{e.message}")
@@ -714,16 +761,14 @@
           validate: input["validate"]
         }
         
-        call(:with_rate_limit_retry, connection) do
-          response = put("/api/data_tables/#{input['table_id']}/rows/batch").
-            payload(payload)
-          
-          {
-            updated_count: response["updated_count"],
-            rows: response["rows"],
-            errors: response["errors"] || []
-          }
-        end
+        response = call(:execute_with_retry, connection, :put, 
+                       "/api/data_tables/#{input['table_id']}/rows/batch", payload: payload)
+        
+        {
+          updated_count: response["updated_count"],
+          rows: response["rows"],
+          errors: response["errors"] || []
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to batch update: #{e.message}")
@@ -764,16 +809,14 @@
           transaction: input["transaction"]
         }
         
-        call(:with_rate_limit_retry, connection) do
-          response = delete("/api/data_tables/#{input['table_id']}/rows/batch").
-            payload(payload)
-          
-          {
-            deleted_count: response["deleted_count"],
-            success: response["success"],
-            errors: response["errors"] || []
-          }
-        end
+        response = call(:execute_with_retry, connection, :delete, 
+                       "/api/data_tables/#{input['table_id']}/rows/batch", payload: payload)
+        
+        {
+          deleted_count: response["deleted_count"],
+          success: response["success"],
+          errors: response["errors"] || []
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to batch delete: #{e.message}")
@@ -835,17 +878,15 @@
         payload[:columns] = input["columns"] if input["columns"].present?
         payload[:filter] = input["filter"] if input["filter"].present?
         
-        call(:with_rate_limit_retry, connection) do
-          response = post("/api/data_tables/#{input['table_id']}/export").
-            payload(payload)
-          
-          {
-            file_url: response["url"],
-            file_size: response["size"],
-            row_count: response["row_count"],
-            expires_at: response["expires_at"]
-          }
-        end
+        response = call(:execute_with_retry, connection, :post, 
+                       "/api/data_tables/#{input['table_id']}/export", payload: payload)
+        
+        {
+          file_url: response["url"],
+          file_size: response["size"],
+          row_count: response["row_count"],
+          expires_at: response["expires_at"]
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to export table: #{e.message}")
@@ -915,17 +956,15 @@
         payload[:key_column] = input["key_column"] if input["key_column"].present?
         payload[:column_mapping] = input["column_mapping"] if input["column_mapping"].present?
         
-        call(:with_rate_limit_retry, connection) do
-          response = post("/api/data_tables/#{input['table_id']}/import").
-            payload(payload)
-          
-          {
-            imported_count: response["imported_count"],
-            updated_count: response["updated_count"] || 0,
-            skipped_count: response["skipped_count"] || 0,
-            errors: response["errors"] || []
-          }
-        end
+        response = call(:execute_with_retry, connection, :post, 
+                       "/api/data_tables/#{input['table_id']}/import", payload: payload)
+        
+        {
+          imported_count: response["imported_count"],
+          updated_count: response["updated_count"] || 0,
+          skipped_count: response["skipped_count"] || 0,
+          errors: response["errors"] || []
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to import data: #{e.message}")
@@ -989,16 +1028,14 @@
         payload[:having] = input["having"] if input["having"].present?
         payload[:filter] = input["filter"] if input["filter"].present?
         
-        call(:with_rate_limit_retry, connection) do
-          response = post("/api/data_tables/#{input['table_id']}/aggregate").
-            payload(payload)
-          
-          {
-            results: response["results"],
-            row_count: response["row_count"],
-            execution_time_ms: response["execution_time_ms"]
-          }
-        end
+        response = call(:execute_with_retry, connection, :post, 
+                       "/api/data_tables/#{input['table_id']}/aggregate", payload: payload)
+        
+        {
+          results: response["results"],
+          row_count: response["row_count"],
+          execution_time_ms: response["execution_time_ms"]
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to aggregate data: #{e.message}")
@@ -1006,7 +1043,7 @@
     },
     
     # Add Column
-    add_column: {
+   add_column: {
       title: "Add column to table",
       subtitle: "Add a new column to an existing table",
       
@@ -1058,15 +1095,13 @@
         payload[:description] = input["description"] if input["description"].present?
         payload[:after] = input["after_column"] if input["after_column"].present?
         
-        call(:with_rate_limit_retry, connection) do
-          response = post("/api/data_tables/#{input['table_id']}/columns").
-            payload(payload)
-          
-          {
-            success: true,
-            column: response
-          }
-        end
+        response = call(:execute_with_retry, connection, :post, 
+                       "/api/data_tables/#{input['table_id']}/columns", payload: payload)
+        
+        {
+          success: true,
+          column: response
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to add column: #{e.message}")
@@ -1106,9 +1141,8 @@
           error("Column deletion not confirmed. Set 'confirm' to true.")
         end
         
-        call(:with_rate_limit_retry, connection) do
-          delete("/api/data_tables/#{input['table_id']}/columns/#{input['column_name']}")
-        end
+        call(:execute_with_retry, connection, :delete, 
+             "/api/data_tables/#{input['table_id']}/columns/#{input['column_name']}")
         
         {
           success: true,
@@ -1154,10 +1188,8 @@
           clone_indexes: input["clone_indexes"]
         }
         
-        call(:with_rate_limit_retry, connection) do
-          post("/api/data_tables/#{input['source_table_id']}/clone").
-            payload(payload)
-        end
+        call(:execute_with_retry, connection, :post, 
+             "/api/data_tables/#{input['source_table_id']}/clone", payload: payload)
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to clone table: #{e.message}")
@@ -1209,21 +1241,19 @@
         params[:action_types] = input["action_types"].join(",") if input["action_types"].present?
         params[:user_email] = input["user_email"] if input["user_email"].present?
         
-        call(:with_rate_limit_retry, connection) do
-          response = get("/api/data_tables/#{input['table_id']}/audit_log").
-            params(params)
-          
-          {
-            entries: response["entries"],
-            total_count: response["total_count"]
-          }
-        end
+        response = call(:execute_with_retry, connection, :get, 
+                       "/api/data_tables/#{input['table_id']}/audit_log", params: params)
+        
+        {
+          entries: response["entries"],
+          total_count: response["total_count"]
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to get audit log: #{e.message}")
       end
     },
-
+    
     # Data Relationships Management
     create_table_relationship: {
       title: "Create table relationship",
@@ -1286,9 +1316,7 @@
           on_update: input["on_update"]
         }
         
-        call(:with_rate_limit_retry, connection) do
-          post("/api/data_tables/relationships").payload(payload)
-        end
+        call(:execute_with_retry, connection, :post, "/api/data_tables/relationships", payload: payload)
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to create relationship: #{e.message}")
@@ -1296,8 +1324,8 @@
     },
 
     # Computed columns
-    add_computed_colum: {
-        title: "Add computed column",
+    add_computed_column: {
+      title: "Add computed column",
       subtitle: "Add a virtual column with computed values",
       
       input_fields: lambda do
@@ -1340,15 +1368,13 @@
           description: input["description"]
         }
         
-        call(:with_rate_limit_retry, connection) do
-          response = post("/api/data_tables/#{input['table_id']}/computed_columns").
-            payload(payload)
-          
-          {
-            success: true,
-            column: response
-          }
-        end
+        response = call(:execute_with_retry, connection, :post, 
+                       "/api/data_tables/#{input['table_id']}/computed_columns", payload: payload)
+        
+        {
+          success: true,
+          column: response
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to add computed column: #{e.message}")
@@ -1403,10 +1429,8 @@
           enabled: input["enabled"]
         }
         
-        call(:with_rate_limit_retry, connection) do
-          post("/api/data_tables/#{input['table_id']}/security_policies").
-            payload(payload)
-        end
+        call(:execute_with_retry, connection, :post, 
+             "/api/data_tables/#{input['table_id']}/security_policies", payload: payload)
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to configure security: #{e.message}")
@@ -1465,10 +1489,8 @@
         }
         payload[:masking_pattern] = input["masking_pattern"] if input["masking_pattern"].present?
         
-        call(:with_rate_limit_retry, connection) do
-          post("/api/data_tables/#{input['table_id']}/field_masking").
-            payload(payload)
-        end
+        call(:execute_with_retry, connection, :post, 
+             "/api/data_tables/#{input['table_id']}/field_masking", payload: payload)
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to configure masking: #{e.message}")
@@ -1537,15 +1559,13 @@
           offset: input["offset"]
         }
         
-        call(:with_rate_limit_retry, connection) do
-          response = post("/api/data_tables/join").payload(payload)
-          
-          {
-            results: response["results"],
-            row_count: response["row_count"],
-            execution_time_ms: response["execution_time_ms"]
-          }
-        end
+        response = call(:execute_with_retry, connection, :post, "/api/data_tables/join", payload: payload)
+        
+        {
+          results: response["results"],
+          row_count: response["row_count"],
+          execution_time_ms: response["execution_time_ms"]
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to join tables: #{e.message}")
@@ -1619,16 +1639,15 @@
         payload[:custom_function] = input["custom_function"] if input["custom_function"].present?
         payload[:default_value] = input["default_value"] if input["default_value"].present?
         
-        call(:with_rate_limit_retry, connection) do
-          response = put("/api/data_tables/#{input['table_id']}/columns/#{input['column_name']}/convert").
-            payload(payload)
-          
-          {
-            success: response["success"],
-            rows_converted: response["rows_converted"],
-            errors: response["errors"] || []
-          }
-        end
+        response = call(:execute_with_retry, connection, :put, 
+                       "/api/data_tables/#{input['table_id']}/columns/#{input['column_name']}/convert", 
+                       payload: payload)
+        
+        {
+          success: response["success"],
+          rows_converted: response["rows_converted"],
+          errors: response["errors"] || []
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to convert column type: #{e.message}")
@@ -1705,16 +1724,14 @@
           payload[:partition_ranges] = input["partition_ranges"]
         end
         
-        call(:with_rate_limit_retry, connection) do
-          response = post("/api/data_tables/#{input['table_id']}/partition").
-            payload(payload)
-          
-          {
-            success: true,
-            partitions_created: response["partitions_created"],
-            partition_info: response["partition_info"]
-          }
-        end
+        response = call(:execute_with_retry, connection, :post, 
+                       "/api/data_tables/#{input['table_id']}/partition", payload: payload)
+        
+        {
+          success: true,
+          partitions_created: response["partitions_created"],
+          partition_info: response["partition_info"]
+        }
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to partition table: #{e.message}")
@@ -1774,10 +1791,8 @@
         }
         payload[:where_clause] = input["where_clause"] if input["where_clause"].present?
         
-        call(:with_rate_limit_retry, connection) do
-          post("/api/data_tables/#{input['table_id']}/indexes").
-            payload(payload)
-        end
+        call(:execute_with_retry, connection, :post, 
+             "/api/data_tables/#{input['table_id']}/indexes", payload: payload)
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to create index: #{e.message}")
@@ -1844,10 +1859,8 @@
           time_range: input["time_range"]
         }
         
-        call(:with_rate_limit_retry, connection) do
-          get("/api/data_tables/#{input['table_id']}/performance").
-            params(params)
-        end
+        call(:execute_with_retry, connection, :get, 
+             "/api/data_tables/#{input['table_id']}/performance", params: params)
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to analyze performance: #{e.message}")
@@ -1902,10 +1915,8 @@
           retention_days: input["retention_days"]
         }
         
-        call(:with_rate_limit_retry, connection) do
-          post("/api/data_tables/#{input['table_id']}/backup").
-            payload(payload)
-        end
+        call(:execute_with_retry, connection, :post, 
+             "/api/data_tables/#{input['table_id']}/backup", payload: payload)
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to create backup: #{e.message}")
@@ -1952,9 +1963,7 @@
           overwrite_existing: input["overwrite_existing"]
         }
         
-        call(:with_rate_limit_retry, connection) do
-          post("/api/data_tables/restore").payload(payload)
-        end
+        call(:execute_with_retry, connection, :post, "/api/data_tables/restore", payload: payload)
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to restore table: #{e.message}")
@@ -2017,10 +2026,8 @@
           severity: input["severity"]
         }
         
-        call(:with_rate_limit_retry, connection) do
-          post("/api/data_tables/#{input['table_id']}/validation_rules").
-            payload(payload)
-        end
+        call(:execute_with_retry, connection, :post, 
+             "/api/data_tables/#{input['table_id']}/validation_rules", payload: payload)
       rescue RestClient::Exception => e
         call(:handle_api_errors, e.response)
         error("Failed to create validation rule: #{e.message}")
@@ -2233,14 +2240,14 @@
         
         since = last_poll || input["since"] || 1.hour.ago
         
-        response = call(:with_rate_limit_retry, connection) do
-          get("/api/data_tables/#{input['table_id']}/rows").
-            params(
-              filter: { created_at: { gt: since } }.to_json,
-              sort: "created_at:asc",
-              limit: input["batch_size"] || 100
-            )
-        end
+        params = {
+          filter: { created_at: { gt: since } }.to_json,
+          sort: "created_at:asc",
+          limit: input["batch_size"] || 100
+        }
+        
+        response = call(:execute_with_retry, connection, :get, 
+                       "/api/data_tables/#{input['table_id']}/rows", params: params)
         
         {
           events: response["rows"],
