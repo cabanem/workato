@@ -474,7 +474,6 @@
         )
       end
     },
-
     # Update table
     update_table: {
       title: "Update data table",
@@ -505,6 +504,8 @@
         put("/api/data_tables/#{input['table_id']}").payload(body)
       end
     },
+    # Truncate table (keep schema, clear rows), API: POST /api/data_tables/:data_table_id/truncate
+
 
     # === RECORDS ===
     query_records: {
