@@ -435,7 +435,7 @@ require 'csv'
           { name: "change_percentage", type: "number" },
           { name: "added_content", type: "array", of: "string" },
           { name: "removed_content", type: "array", of: "string" },
-          { name: "modified_sections", type: "array", of: "object", properties: object_definitions["modified_section"] },
+          { name: "modified_sections", type: "array", of: "object", properties: object_definitions["diff_section"] },
           { name: "requires_reindexing", type: "boolean" }
         ]
       end,
