@@ -51,28 +51,20 @@ require 'csv'
         default: "development"
       },
       {
-        name: "chunk_size_default",
-        label: "Default Chunk Size",
-        hint: "Default token size for text chunks",
-        optional: true,
-        default: "1000",
-        control_type: "number"
+        name: "chunk_size_default", label: "Default Chunk Size",
+        hint: "Default token size for text chunks", optional: true,
+        default: 1000, control_type: "number", type: "integer", convert_input: "integer_conversion"
       },
       {
-        name: "chunk_overlap_default",
-        label: "Default Chunk Overlap",
-        hint: "Default token overlap between chunks",
-        optional: true,
-        default: "100",
-        control_type: "number"
+        name: "chunk_overlap_default", label: "Default Chunk Overlap",
+        hint: "Default token overlap between chunks", optional: true,
+        default: 100, control_type: "number", type: "integer", convert_input: "integer_conversion"
       },
       {
-        name: "similarity_threshold",
-        label: "Similarity Threshold",
-        hint: "Minimum similarity score (0-1)",
-        optional: true,
-        default: "0.7",
-        control_type: "number"
+        name: "similarity_threshold", label: "Similarity Threshold",
+        hint: "Minimum similarity score (0-1)", optional: true,
+        type: "number", control_type: "number", default: 0.7,
+        convert_input: "float_conversion"
       }
     ],
     
@@ -115,43 +107,48 @@ require 'csv'
     smart_chunk_text: {
       title: "Smart Chunk Text",
       subtitle: "Intelligently chunk text preserving context",
-      help:->() {"Splits text into chunks with smart boundaries and overlap"},
+      help: lambda { { body: "Splits text into chunks with smart boundaries and overlap." } },
       description: "Intelligently chunk text",
 
-      input_fields: lambda do
-        [
-          { name: "text", label: "Input Text", type: "string", optional: false, control_type: "text-area" },
-          { name: "chunk_size", label: "Chunk Size (tokens)", type: "integer", optional: true, default: 1000, hint: "Maximum tokens per chunk" },
-          { name: "chunk_overlap", label: "Chunk Overlap (tokens)", type: "integer", optional: true, default: 100, hint: "Token overlap between chunks" },
-          { name: "preserve_sentences", label: "Preserve Sentences", type: "boolean", optional: true, default: true, hint: "Don't break mid-sentence" },
-          { name: "preserve_paragraphs", label: "Preserve Paragraphs", type: "boolean", optional: true, default: false, hint: "Try to keep paragraphs intact" }
+      config_fields: [
+        {
+          name: "use_custom_settings",
+          label: "Configuration Mode",
+          control_type: "select",
+          pick_list: [
+            ["Use Connection Defaults", "defaults"],
+            ["Custom Settings", "custom"]
+          ],
+          default: "defaults",
+          sticky: true,
+          hint: "Use connection defaults or override below"
+        }
+      ],
+
+      input_fields: lambda do |object_definitions, connection, config|
+        fields = [
+          { name: "text", label: "Input Text", type: "string",
+            optional: false, control_type: "text-area",
+            hint: "Text content to be chunked" }
         ]
+        if config["use_custom_settings"] == "custom"
+          fields.concat(object_definitions["chunking_config"])
+        end
+        fields
       end,
 
-      output_fields: lambda do
-        [
-          {
-            name: "chunks",
-            type: "array",
-            of: "object",
-            properties: [
-              { name: "chunk_id", type: "string" },
-              { name: "chunk_index", type: "integer" },
-              { name: "text", type: "string" },
-              { name: "token_count", type: "integer" },
-              { name: "start_char", type: "integer" },
-              { name: "end_char", type: "integer" },
-              { name: "metadata", type: "object" }
-            ]
-          },
-          { name: "total_chunks", type: "integer" },
-          { name: "total_tokens", type: "integer" }
-        ]
+      output_fields: lambda do |object_definitions|
+        object_definitions["chunking_result"]
       end,
 
-      execute: lambda do |connection, input|
-        input['chunk_size']   ||= (connection['chunk_size_default'] || 1000).to_i
-        input['chunk_overlap'] ||= (connection['chunk_overlap_default'] || 100).to_i
+      execute: lambda do |connection, input, _eis, _eos, config|
+        if config["use_custom_settings"] != "custom"
+          # rely on convert_input on connection fields; keep as integers
+          input['chunk_size']     ||= connection['chunk_size_default']
+          input['chunk_overlap']  ||= connection['chunk_overlap_default']
+          input['preserve_sentences']  = true if input['preserve_sentences'].nil?
+          input['preserve_paragraphs'] = false if input['preserve_paragraphs'].nil?
+        end
         call(:chunk_text_with_overlap, input)
       end
     },
@@ -163,29 +160,17 @@ require 'csv'
       title: "Clean Email Text",
       subtitle: "Preprocess email content for RAG",
       description: "Clean and preprocess email body text",
-      help: ->() {"Cleans email body text by removing signatures, quoted text, disclaimers, and normalizing whitespace. Optionally extracts URLs."},
+      help: lambda { { body: "Removes signatures, quoted text, disclaimers; normalizes whitespace; optional URL extraction." } },
 
-      input_fields: lambda do
+      input_fields: lambda do |object_definitions|
         [
-          { name: "email_body", label: "Email Body", type: "string", optional: false, control_type: "text-area" },
-          { name: "remove_signatures", label: "Remove Signatures", type: "boolean", optional: true, default: true },
-          { name: "remove_quotes", label: "Remove Quoted Text", type: "boolean", optional: true, default: true },
-          { name: "remove_disclaimers", label: "Remove Disclaimers", type: "boolean", optional: true, default: true },
-          { name: "normalize_whitespace", label: "Normalize Whitespace", type: "boolean", optional: true, default: true },
-          { name: "extract_urls", label: "Extract URLs", type: "boolean", optional: true, default: false }
-        ]
+          { name: "email_body", label: "Email Body", type: "string",
+            optional: false, control_type: "text-area" }
+        ] + object_definitions["email_cleaning_options"]
       end,
 
-      output_fields: lambda do
-        [
-          { name: "cleaned_text", type: "string" },
-          { name: "extracted_query", type: "string" },
-          { name: "removed_sections", type: "array", of: "string" },
-          { name: "extracted_urls", type: "array", of: "string" },
-          { name: "original_length", type: "integer" },
-          { name: "cleaned_length", type: "integer" },
-          { name: "reduction_percentage", type: "number" }
-        ]
+      output_fields: lambda do |object_definitions|
+        object_definitions["email_cleaning_result"]
       end,
 
       execute: lambda do |_connection, input|
@@ -199,29 +184,47 @@ require 'csv'
     calculate_similarity: {
       title: "Calculate Vector Similarity",
       subtitle: "Compute similarity scores for vectors",
-      description: "Compute similarity scores for vector embeddings",
-      help: ->() {"Calculates similarity between two embedding vectors using cosine or Euclidean methods, with optional normalization."},
+      description: "Compute similarity between embedding vectors",
 
-      input_fields: lambda do
+      config_fields: [
+        {
+          name: "similarity_method",
+          label: "Similarity Method",
+          control_type: "select",
+          pick_list: "similarity_types",
+          default: "cosine",
+          sticky: true
+        }
+      ],
+
+      input_fields: lambda do |_object_definitions, _connection, config|
         [
-          { name: "vector_a", label: "Vector A", type: "array", of: "number", optional: false, hint: "First embedding vector" },
-          { name: "vector_b", label: "Vector B", type: "array", of: "number", optional: false, hint: "Second embedding vector" },
-          { name: "similarity_type", label: "Similarity Type", type: "string", optional: true, default: "cosine", control_type: "select", pick_list: "similarity_types" },
-          { name: "normalize", label: "Normalize Vectors", type: "boolean", optional: true, default: true }
+          {
+            name: "vectors", label: "Vectors to Compare", type: "object",
+            properties: [
+              { name: "vector_a", label: "First Vector", type: "array",
+                of: "number", list_mode_toggle: true, optional: false },
+              { name: "vector_b", label: "Second Vector", type: "array",
+                of: "number", list_mode_toggle: true, optional: false }
+            ]
+          },
+          {
+            name: "normalize", label: "Normalize Vectors", type: "boolean",
+            default: true, optional: true,
+            hint: "Normalize vectors before comparison",
+            ngIf: 'config.similarity_method != "dot_product"'
+          }
         ]
       end,
 
-      output_fields: lambda do
-        [
-          { name: "similarity_score", type: "number" },
-          { name: "similarity_percentage", type: "number" },
-          { name: "is_similar", type: "boolean" },
-          { name: "similarity_type", type: "string" },
-          { name: "computation_time_ms", type: "integer" }
-        ]
+      output_fields: lambda do |object_definitions|
+        object_definitions["similarity_result"] # add if you want, or keep your inline fields
       end,
 
-      execute: lambda do |connection, input|
+      execute: lambda do |connection, input, _eis, _eos, config|
+        input['vector_a'] = input.dig('vectors', 'vector_a')
+        input['vector_b'] = input.dig('vectors', 'vector_b')
+        input['similarity_type'] ||= config['similarity_method']
         call(:compute_similarity, input, connection)
       end
     },
@@ -285,33 +288,64 @@ require 'csv'
     build_rag_prompt: {
       title: "Build RAG Prompt",
       subtitle: "Construct optimized RAG prompt",
-      description: "Construct optimized RAG prompt",
-      help: ->() {"Builds a Retrieval-Augmented Generation (RAG) prompt by combining user queries with relevant context documents."},
+      description: "Build retrieval-augmented generation prompt",
 
-      input_fields: lambda do |object_definitions|
-        [
-          { name: "query", label: "User Query", type: "string", optional: false, control_type: "text-area" },
+      config_fields: [
+        {
+          name: "prompt_mode",
+          label: "Prompt Configuration",
+          control_type: "select",
+          pick_list: [
+            ["Template-based", "template"],
+            ["Custom Instructions", "custom"]
+          ],
+          default: "template",
+          sticky: true
+        }
+      ],
+
+      input_fields: lambda do |object_definitions, _connection, config|
+        fields = [
+          { name: "query", label: "User Query", type: "string",
+            optional: false, control_type: "text-area" },
           {
-            name: "context_documents",
-            label: "Context Documents",
+            name: "context_documents", label: "Context Documents",
             type: "array", of: "object",
             properties: object_definitions["context_document"],
-            list_mode_toggle: true, # allow dynamic-list pills vs static
-            optional: false
-          },
-          {
-            name: "prompt_template", label: "Prompt Template", default: "standard",
-            type: "string", optional: true, control_type: "select", pick_list: "prompt_templates",
-            toggle_hint: "Select", 
-            toggle_field: {
-              name: "prompt_template", label: "Template (custom text)", type: "string",
-              control_type: "text", toggle_hint: "Use text"
-            }
-          },
-          { name: "max_context_length", label: "Max Context Length", type: "integer", optional: true, default: 3000 },
-          { name: "include_metadata", label: "Include Metadata", type: "boolean", convert_input: "boolean_conversion", optional: true, default: false },
-          { name: "system_instructions", label: "System Instructions", type: "string", optional: true, control_type: "text-area" }
+            list_mode_toggle: true, optional: false
+          }
         ]
+        if config["prompt_mode"] == "template"
+          fields << {
+            name: "prompt_template", label: "Prompt Template",
+            type: "string", default: "standard",
+            control_type: "select", pick_list: "prompt_templates", optional: true,
+            toggle_hint: "Select",
+            toggle_field: {
+              name: "prompt_template", label: "Template (custom text)",
+              type: "string", control_type: "text", toggle_hint: "Use text"
+            }
+          }
+        else
+          fields << {
+            name: "system_instructions", label: "System Instructions",
+            type: "string", control_type: "text-area", optional: true,
+            hint: "Custom system instructions for the prompt"
+          }
+        end
+
+        fields << {
+          name: "advanced_settings", label: "Advanced Settings", type: "object", optional: true,
+          properties: [
+            { name: "max_context_length", label: "Max Context Length",
+              type: "integer", default: 3000, convert_input: "integer_conversion",
+              hint: "Maximum tokens for context" },
+            { name: "include_metadata", label: "Include Metadata",
+              type: "boolean", default: false, convert_input: "boolean_conversion",
+              hint: "Include document metadata in prompt" }
+          ]
+        }
+        fields
       end,
 
       output_fields: lambda do
@@ -324,7 +358,11 @@ require 'csv'
         ]
       end,
 
-      execute: lambda do |_connection, input|
+      execute: lambda do |_connection, input, _eis, _eos, _config|
+        if input['advanced_settings']
+          input.merge!(input['advanced_settings'])
+          input.delete('advanced_settings')
+        end
         call(:construct_rag_prompt, input)
       end
     },
@@ -778,7 +816,7 @@ require 'csv'
                   if normalize
                     score >= threshold
                   else
-                    raise 'For dot_product without normalization, provide an absolute threshold appropriate to your embedding scale.'
+                    error('For dot_product without normalization, provide an absolute threshold appropriate to your embedding scale.')
                   end
                 end
 
@@ -1295,7 +1333,7 @@ require 'csv'
             else
               60
             end
-          sleep([delay, (2 ** retries)].max + rand(0..3))
+          sleep([ [delay, (2 ** retries)].max, 30 ].min + rand(0..3))
           retries += 1
           retry
         end
@@ -1757,6 +1795,71 @@ require 'csv'
           { name: "size", type: "integer" }
         ]
       end
+    },
+
+    chunking_config: {
+      fields: lambda do
+        [
+          { name: "chunk_size", label: "Chunk Size (tokens)", type: "integer",
+            default: 1000, convert_input: "integer_conversion",
+            hint: "Maximum tokens per chunk" },
+          { name: "chunk_overlap", label: "Chunk Overlap (tokens)", type: "integer",
+            default: 100, convert_input: "integer_conversion",
+            hint: "Token overlap between chunks" },
+          { name: "preserve_sentences", label: "Preserve Sentences", type: "boolean",
+            default: true, convert_input: "boolean_conversion",
+            hint: "Don't break mid-sentence" },
+          { name: "preserve_paragraphs", label: "Preserve Paragraphs", type: "boolean",
+            default: false, convert_input: "boolean_conversion",
+            hint: "Try to keep paragraphs intact" }
+        ]
+      end
+    },
+
+    chunking_result: {
+      fields: lambda do |connection, _config, object_definitions|
+        [
+          { name: "chunks", type: "array", of: "object",
+            properties: object_definitions["chunk_object"] },
+          { name: "total_chunks", type: "integer" },
+          { name: "total_tokens", type: "integer" }
+        ]
+      end
+    },
+
+    email_cleaning_options: {
+      fields: lambda do
+        [
+          { name: "remove_signatures", label: "Remove Signatures", type: "boolean",
+            default: true, convert_input: "boolean_conversion" },
+          { name: "remove_quotes", label: "Remove Quoted Text", type: "boolean",
+            default: true, convert_input: "boolean_conversion" },
+          { name: "remove_disclaimers", label: "Remove Disclaimers", type: "boolean",
+            default: true, convert_input: "boolean_conversion" },
+          { name: "normalize_whitespace", label: "Normalize Whitespace", type: "boolean",
+            default: true, convert_input: "boolean_conversion" },
+          { name: "extract_urls", label: "Extract URLs", type: "boolean",
+            default: false, convert_input: "boolean_conversion" }
+        ]
+      end
+    },
+
+    email_cleaning_result: {
+      fields: lambda do
+        [
+          { name: "cleaned_text", type: "string" },
+          { name: "extracted_query", type: "string" },
+          { name: "removed_sections", type: "array", of: "string" },
+          { name: "extracted_urls", type: "array", of: "string" },
+          { name: "original_length", type: "integer" },
+          { name: "cleaned_length", type: "integer" },
+          { name: "reduction_percentage", type: "number" }
+        ]
+      end
+    },
+
+    similarity_result: {
+
     }
   },
   
