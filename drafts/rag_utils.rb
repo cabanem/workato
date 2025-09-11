@@ -346,7 +346,9 @@
           },
           { name: "total_batches", type: "integer" },
           { name: "total_embeddings", type: "integer" },
-          { name: "index_endpoint", type: "string" }
+          { name: "index_endpoint", type: "string" },
+          { name: 'format', type: 'string' },
+          { name: 'payload', type: 'string' } # JSON/JSONL/CSV string per format_type
         ]
       end,
       
@@ -778,7 +780,7 @@
   # METHODS (Helper Functions)
   # ==========================================
   methods: {
-    
+
     chunk_text_with_overlap: lambda do |input|
       text = input['text'].to_s
       chunk_size = (input['chunk_size'] || 1000).to_i
@@ -786,71 +788,84 @@
       preserve_sentences  = !!input['preserve_sentences']
       preserve_paragraphs = !!input['preserve_paragraphs']
 
-      overlap = [overlap, [chunk_size - 1, 0].max].min
+      # ensure overlap < chunk_size and non-negative
+      overlap = [[overlap, 0].max, [chunk_size - 1, 0].max].min
+
+      # rough token->char estimate
       chars_per_chunk = [chunk_size, 1].max * 4
       char_overlap    = overlap * 4
 
-      chunks, chunk_index, position = [], 0, 0
+      chunks = []
+      chunk_index = 0
+      position = 0
+      text_len = text.length
 
-      while position < text.length
-        tentative_end = [position + chars_per_chunk, text.length].min
+      while position < text_len
+        tentative_end = [position + chars_per_chunk, text_len].min
         chunk_end = tentative_end
         segment = text[position...tentative_end]
 
-        if preserve_paragraphs && tentative_end < text.length
-          if (matches = segment.scan(/\n{2,}/)).any?
-            last = matches.last
-            idx  = segment.rindex(last)
-            chunk_end = position + idx + last.length
-          end
+        if preserve_paragraphs && tentative_end < text_len
+          rel_end = call(:util_last_boundary_end, segment, /\n{2,}/)
+          chunk_end = position + rel_end if rel_end
         end
 
-        if preserve_sentences && chunk_end == tentative_end && tentative_end < text.length
-          if (matches = segment.scan(/[.!?]["')\]]?\s/)).any?
-            last = matches.last
-            idx  = segment.rindex(last)
-            chunk_end = position + idx + last.length
-          end
+        if preserve_sentences && chunk_end == tentative_end && tentative_end < text_len
+          rel_end = call(:util_last_boundary_end, segment, /[.!?]["')\]]?\s/)
+          chunk_end = position + rel_end if rel_end
         end
 
-        chunk_end = tentative_end if chunk_end <= position
+        # guarantee forward progress
+        if chunk_end <= position
+          chunk_end = [position + [chars_per_chunk, 1].max, text_len].min
+        end
+
         chunk_text = text[position...chunk_end]
+        token_count = (chunk_text.length / 4.0).ceil
 
         chunks << {
           chunk_id:    "chunk_#{chunk_index}",
           chunk_index: chunk_index,
           text:        chunk_text,
-          token_count: (chunk_text.length / 4.0).ceil,
+          token_count: token_count,
           start_char:  position,
           end_char:    chunk_end,
-          metadata:    { has_overlap: chunk_index.positive?, is_final: chunk_end >= text.length }
+          metadata:    { has_overlap: chunk_index.positive?, is_final: chunk_end >= text_len }
         }
 
-        break if chunk_end >= text.length
-        # guaranteed forward movement
+        break if chunk_end >= text_len
+
         next_position = chunk_end - char_overlap
-        position = next_position > position ? next_position : chunk_end # always advance
+        position = next_position > position ? next_position : chunk_end
         chunk_index += 1
       end
 
-      { chunks: chunks,
+      {
+        chunks: chunks,
         total_chunks: chunks.length,
-        total_tokens: chunks.sum { |c| c[:token_count] } }
+        total_tokens: chunks.sum { |c| c[:token_count] }
+      }
     end,
-    
+
     process_email_text: lambda do |input|
       cleaned = (input['email_body'] || '').dup
       original_length = cleaned.length
       removed_sections = []
       extracted_urls = []
 
+      # normalize line endings
       cleaned.gsub!("\r\n", "\n")
 
+      # remove quoted lines (operate line-by-line; no multi-line greediness)
       if input['remove_quotes']
-        removed_sections += cleaned.scan(/^\s*>.*$/)
-        cleaned.gsub!(/^\s*>.*$/ , '') # line mode, not /m
+        lines = cleaned.lines
+        quoted = lines.select { |l| l.lstrip.start_with?('>') }
+        removed_sections << quoted.join unless quoted.empty?
+        lines.reject! { |l| l.lstrip.start_with?('>') }
+        cleaned = lines.join
       end
 
+      # bottom-up signature trim near the end
       if input['remove_signatures']
         lines = cleaned.lines
         sig_idx = lines.rindex { |l| l =~ /^\s*(--\s*$|Best regards,|Regards,|Sincerely,|Thanks,|Sent from my)/i }
@@ -860,6 +875,7 @@
         end
       end
 
+      # disclaimers: only if detected near the bottom
       if input['remove_disclaimers']
         lines = cleaned.lines
         disc_idx = lines.rindex { |l| l =~ /(This (e-)?mail|This message).*(confidential|intended only)/i }
@@ -869,16 +885,19 @@
         end
       end
 
+      # extract URLs (before whitespace normalization)
       if input['extract_urls']
         extracted_urls = cleaned.scan(%r{https?://[^\s<>"'()]+})
       end
 
+      # normalize whitespace but keep paragraph breaks reasonable
       if input['normalize_whitespace']
         cleaned.gsub!(/[ \t]+/, ' ')
         cleaned.gsub!(/\n{3,}/, "\n\n")
         cleaned.strip!
       end
 
+      # first non-empty paragraph as query (fallback to first 200 chars)
       extracted_query = cleaned.split(/\n{2,}/).find { |p| p.strip.length.positive? } || cleaned[0, 200].to_s
 
       {
@@ -891,42 +910,72 @@
         reduction_percentage: (original_length.zero? ? 0 : ((1 - cleaned.length.to_f / original_length) * 100)).round(2)
       }
     end,
-    
+
     compute_similarity: lambda do |input, connection|
       start_time = Time.now
-      
-      vector_a = input["vector_a"]
-      vector_b = input["vector_b"]
-      threshold = connection["similarity_threshold"].to_f
-      
-      # Normalize vectors if requested
-      if input["normalize"]
-        mag_a = Math.sqrt(vector_a.map { |x| x**2 }.sum)
-        mag_b = Math.sqrt(vector_b.map { |x| x**2 }.sum)
-        vector_a = vector_a.map { |x| x / mag_a } if mag_a > 0
-        vector_b = vector_b.map { |x| x / mag_b } if mag_b > 0
+
+      a = call(:util_coerce_numeric_vector, input['vector_a'])
+      b = call(:util_coerce_numeric_vector, input['vector_b'])
+      raise 'Vectors must be the same length.' unless a.length == b.length
+
+      normalize = input.key?('normalize') ? !!input['normalize'] : true
+      type      = (input['similarity_type'] || 'cosine').to_s
+      threshold = (connection['similarity_threshold'] || 0.7).to_f
+
+      # normalization strategy
+      if normalize
+        norm = ->(v) { mag = Math.sqrt(v.sum { |x| x * x }); mag.zero? ? v : v.map { |x| x / mag } }
+        a = norm.call(a)
+        b = norm.call(b)
       end
-      
-      # Calculate cosine similarity
-      dot_product = vector_a.zip(vector_b).map { |a, b| a * b }.sum
-      mag_a = Math.sqrt(vector_a.map { |x| x**2 }.sum)
-      mag_b = Math.sqrt(vector_b.map { |x| x**2 }.sum)
-      
-      similarity = mag_a > 0 && mag_b > 0 ? dot_product / (mag_a * mag_b) : 0
-      
+
+      dot = a.zip(b).sum { |x, y| x * y }
+      mag_a = Math.sqrt(a.sum { |x| x * x })
+      mag_b = Math.sqrt(b.sum { |x| x * x })
+
+      score = case type
+              when 'cosine'
+                (mag_a > 0 && mag_b > 0) ? dot / (mag_a * mag_b) : 0.0
+              when 'euclidean'
+                dist = Math.sqrt(a.zip(b).sum { |x, y| (x - y)**2 })
+                1.0 / (1.0 + dist) # map distance to (0,1]
+              when 'dot_product'
+                # if not normalized, the scale is embedding-dependent; strongly prefer normalized
+                dot
+              else
+                (mag_a > 0 && mag_b > 0) ? dot / (mag_a * mag_b) : 0.0
+              end
+
+      percent = %w[cosine euclidean].include?(type) ? (score * 100).round(2) : nil
+
+      similar = case type
+                when 'cosine', 'euclidean' then score >= threshold
+                when 'dot_product'
+                  if normalize
+                    score >= threshold
+                  else
+                    # nudges users to supply meaningful threshold when not normalized
+                    raise 'For dot_product without normalization, provide an absolute threshold appropriate to your embedding scale.'
+                  end
+                end
+
       {
-        similarity_score: similarity.round(4),
-        similarity_percentage: (similarity * 100).round(2),
-        is_similar: similarity >= threshold,
-        similarity_type: input["similarity_type"] || "cosine",
+        similarity_score: score.round(6),
+        similarity_percentage: percent,
+        is_similar: similar,
+        similarity_type: type,
         computation_time_ms: ((Time.now - start_time) * 1000).round
       }
     end,
-    
+
     format_for_vertex_ai: lambda do |input|
-      embeddings = input["embeddings"]
-      batch_size = input["batch_size"] || 25
-      
+      require 'json'
+      require 'csv'
+
+      embeddings = input['embeddings'] || []
+      batch_size = (input['batch_size'] || 25).to_i
+      format     = (input['format_type'] || 'json').to_s
+
       batches = []
       embeddings.each_slice(batch_size).with_index do |batch, index|
         formatted_batch = {
@@ -934,23 +983,327 @@
           batch_number: index,
           datapoints: batch.map do |emb|
             {
-              datapoint_id: emb["id"],
-              feature_vector: emb["vector"],
-              restricts: emb["metadata"] || {}
+              datapoint_id: emb['id'],
+              feature_vector: emb['vector'] || [],
+              restricts: emb['metadata'] || {}
             }
           end,
           size: batch.length
         }
         batches << formatted_batch
       end
-      
+
+      # flattened datapoints for serialization
+      all_datapoints = batches.flat_map { |b| b[:datapoints] }
+
+      payload = case format
+                when 'jsonl'
+                  all_datapoints.map { |dp| JSON.generate(dp) }.join("\n")
+                when 'csv'
+                  rows = [%w[datapoint_id feature_vector restricts]]
+                  all_datapoints.each do |dp|
+                    rows << [dp[:datapoint_id], JSON.generate(dp[:feature_vector]), JSON.generate(dp[:restricts])]
+                  end
+                  CSV.generate { |c| rows.each { |r| c << r } }
+                else # 'json'
+                  JSON.generate(all_datapoints)
+                end
+
       {
         formatted_batches: batches,
         total_batches: batches.length,
         total_embeddings: embeddings.length,
-        index_endpoint: input["index_endpoint"]
+        index_endpoint: input['index_endpoint'],
+        format: format,
+        payload: payload # expose serialized data (add to action output_fields)
       }
+    end,
+
+    construct_rag_prompt: lambda do |input|
+      require 'json'
+
+      query = input['query'].to_s
+      context_docs = Array(input['context_documents'] || [])
+      template = (input['prompt_template'] || 'standard').to_s
+      max_length = (input['max_context_length'] || 3000).to_i
+      include_metadata = !!input['include_metadata']
+      system_instructions = input['system_instructions'].to_s
+
+      sorted_context = context_docs.sort_by { |doc| (doc['relevance_score'] || 0) }.reverse
+
+      context_parts = []
+      total_tokens = 0
+
+      sorted_context.each do |doc|
+        content = doc['content'].to_s
+        doc_tokens = (content.length / 4.0).ceil
+        break if doc_tokens > max_length && context_parts.empty?
+        next if total_tokens + doc_tokens > max_length
+
+        part = content.dup
+        part << "\nMetadata: #{JSON.generate(doc['metadata'])}" if include_metadata && doc['metadata']
+        context_parts << part
+        total_tokens += doc_tokens
+      end
+
+      context_text = context_parts.join("\n\n---\n\n")
+
+      prompt = case template
+              when 'standard'
+                "Context:\n#{context_text}\n\nQuery: #{query}\n\nAnswer:"
+              when 'customer_service'
+                "You are a customer service assistant. Use the following context to answer the customer's question.\n\nContext:\n#{context_text}\n\nCustomer Question: #{query}\n\nResponse:"
+              when 'technical'
+                "You are a technical support specialist. Use the provided context to solve the technical issue.\n\nContext:\n#{context_text}\n\nTechnical Issue: #{query}\n\nSolution:"
+              when 'sales'
+                "You are a sales representative. Use the context to address the sales inquiry.\n\nContext:\n#{context_text}\n\nSales Inquiry: #{query}\n\nResponse:"
+              else
+                "#{system_instructions}\n\nContext:\n#{context_text}\n\nQuery: #{query}\n\nAnswer:"
+              end
+
+      {
+        formatted_prompt: prompt,
+        token_count: (prompt.length / 4.0).ceil,
+        context_used: context_parts.length,
+        truncated: context_parts.length < sorted_context.length,
+        prompt_metadata: { template: template, context_docs_used: context_parts.length, total_context_docs: sorted_context.length }
+      }
+    end,
+
+    validate_response: lambda do |input, _connection|
+      response = (input['response_text'] || '').to_s
+      query    = (input['original_query'] || '').to_s
+      rules    = Array(input['validation_rules'] || [])
+      min_confidence = (input['min_confidence'] || 0.7).to_f
+
+      issues = []
+      confidence = 1.0
+
+      if response.strip.empty?
+        issues << 'Response is empty'
+        confidence -= 0.5
+      elsif response.length < 10
+        issues << 'Response is too short'
+        confidence -= 0.3
+      end
+
+      query_words = query.downcase.split(/\W+/).reject(&:empty?)
+      response_words = response.downcase.split(/\W+/).reject(&:empty?)
+      overlap = query_words.empty? ? 0.0 : ((query_words & response_words).length.to_f / query_words.length)
+
+      if overlap < 0.1
+        issues << 'Response may not address the query'
+        confidence -= 0.4
+      end
+
+      if response.include?('...') || response.downcase.include?('incomplete')
+        issues << 'Response appears incomplete'
+        confidence -= 0.2
+      end
+
+      rules.each do |rule|
+        case rule['rule_type']
+        when 'contains'
+          unless response.include?(rule['rule_value'].to_s)
+            issues << "Response does not contain required text: #{rule['rule_value']}"
+            confidence -= 0.3
+          end
+        when 'not_contains'
+          if response.include?(rule['rule_value'].to_s)
+            issues << "Response contains prohibited text: #{rule['rule_value']}"
+            confidence -= 0.3
+          end
+        end
+      end
+
+      # clamp
+      confidence = [[confidence, 0.0].max, 1.0].min
+
+      {
+        is_valid: confidence >= min_confidence,
+        confidence_score: confidence.round(2),
+        validation_results: { query_overlap: overlap.round(2), response_length: response.length, word_count: response_words.length },
+        issues_found: issues,
+        requires_human_review: confidence < 0.5,
+        suggested_improvements: issues.empty? ? [] : ['Review and improve response quality']
+      }
+    end,
+
+    extract_metadata: lambda do |input|
+      require 'digest'
+      require 'time'
+
+      content = input['document_content'].to_s
+      file_path = input['file_path'].to_s
+      extract_entities = input.key?('extract_entities') ? !!input['extract_entities'] : true
+      generate_summary = input.key?('generate_summary') ? !!input['generate_summary'] : true
+
+      start_time = Time.now
+
+      word_count = content.split(/\s+/).reject(&:empty?).length
+      char_count = content.length
+      estimated_tokens = (content.length / 4.0).ceil
+
+      language = content.match?(/[àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ]/i) ? 'non-english' : 'english'
+      summary = generate_summary ? (content[0, 200].to_s + (content.length > 200 ? '...' : '')) : ''
+
+      key_topics = []
+      if extract_entities
+        common = %w[the a an and or but in on at to for of with by from is are was were be been being this that these those there here then than into out over under after before about as it its it's their them they our we you your he she his her him not will would can could should may might must also just more most other some such]
+        words = content.downcase.scan(/[a-z0-9\-]+/).reject { |w| w.length < 4 || common.include?(w) }
+        freq = words.each_with_object(Hash.new(0)) { |w, h| h[w] += 1 }
+        key_topics = freq.sort_by { |_, c| -c }.first(5).map(&:first)
+      end
+
+      file_hash = Digest::SHA256.hexdigest(content)
+      document_id = Digest::SHA1.hexdigest("#{file_path}|#{file_hash}")
+
+      {
+        document_id: document_id,
+        file_hash: file_hash,
+        word_count: word_count,
+        character_count: char_count,
+        estimated_tokens: estimated_tokens,
+        language: language,
+        summary: summary,
+        key_topics: key_topics,
+        entities: { people: [], organizations: [], locations: [] },
+        created_at: Time.now.iso8601,
+        processing_time_ms: ((Time.now - start_time) * 1000).round
+      }
+    end,
+
+    detect_changes: lambda do |input|
+      current_hash     = input['current_hash']
+      current_content  = input['current_content']
+      previous_hash    = input['previous_hash']
+      previous_content = input['previous_content']
+      check_type       = (input['check_type'] || 'hash').to_s
+
+      has_changed = current_hash != previous_hash
+      change_type = 'none'
+      change_percentage = 0.0
+      added = []
+      removed = []
+      modified_sections = []
+
+      if has_changed
+        change_type = 'hash_changed'
+
+        if check_type == 'content' && current_content && previous_content
+          cur = current_content.to_s.split("\n")
+          prev = previous_content.to_s.split("\n")
+          i = 0
+          j = 0
+          window = 20
+
+          while i < cur.length && j < prev.length
+            if cur[i] == prev[j]
+              i += 1
+              j += 1
+              next
+            end
+
+            # try to resync within a small window
+            idx_in_cur = ((i + 1)..[i + window, cur.length - 1].min).find { |k| cur[k] == prev[j] }
+            idx_in_prev = ((j + 1)..[j + window, prev.length - 1].min).find { |k| prev[k] == cur[i] }
+
+            if idx_in_cur
+              # lines added in current
+              block = cur[i...idx_in_cur]
+              added.concat(block)
+              modified_sections << {
+                type: 'added',
+                current_range: [i, idx_in_cur - 1],
+                previous_range: [j - 1, j - 1],
+                current_lines: block
+              }
+              i = idx_in_cur
+            elsif idx_in_prev
+              # lines removed from previous
+              block = prev[j...idx_in_prev]
+              removed.concat(block)
+              modified_sections << {
+                type: 'removed',
+                current_range: [i - 1, i - 1],
+                previous_range: [j, idx_in_prev - 1],
+                previous_lines: block
+              }
+              j = idx_in_prev
+            else
+              # treat as modified pair
+              modified_sections << {
+                type: 'modified',
+                current_range: [i, i],
+                previous_range: [j, j],
+                current_lines: [cur[i]],
+                previous_lines: [prev[j]]
+              }
+              added << cur[i]
+              removed << prev[j]
+              i += 1
+              j += 1
+            end
+          end
+
+          # tails
+          if i < cur.length
+            block = cur[i..-1]
+            added.concat(block)
+            modified_sections << {
+              type: 'added',
+              current_range: [i, cur.length - 1],
+              previous_range: [j - 1, j - 1],
+              current_lines: block
+            }
+          elsif j < prev.length
+            block = prev[j..-1]
+            removed.concat(block)
+            modified_sections << {
+              type: 'removed',
+              current_range: [i - 1, i - 1],
+              previous_range: [j, prev.length - 1],
+              previous_lines: block
+            }
+          end
+
+          total_lines = [cur.length, prev.length].max
+          change_percentage = total_lines.zero? ? 0.0 : (((added.length + removed.length).to_f / total_lines) * 100).round(2)
+          change_type = 'content_changed'
+        end
+      end
+
+      {
+        has_changed: has_changed,
+        change_type: change_type,
+        change_percentage: change_percentage,
+        added_content: added,
+        removed_content: removed,
+        modified_sections: modified_sections,
+        requires_reindexing: has_changed
+      }
+    end,
+
+    # ---------- Helpers ----------
+
+    util_last_boundary_end: lambda do |segment, regex|
+      # returns the end index (within segment) of the last match, or nil
+      matches = segment.to_enum(:scan, regex).map { Regexp.last_match }
+      return nil if matches.empty?
+      matches.last.end(0)
+    end,
+
+    util_coerce_numeric_vector: lambda do |arr|
+      v = Array(arr).map do |x|
+        begin
+          Float(x)
+        rescue
+          raise 'Vectors must contain only numerics.'
+        end
+      end
+      v
     end
+
   },
   
   # ==========================================
