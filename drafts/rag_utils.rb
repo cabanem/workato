@@ -235,47 +235,36 @@ require 'csv'
       description: "Prepare embedding data for Vertex AI Vector Search",
       help: ->() {"Formats embedding vectors into batches suitable for Vertex AI Vector Search ingestion, supporting JSON, JSONL, and CSV formats."},
 
-      input_fields: lambda do
+      input_fields: lambda do |object_definitions|
         [
           {
-            name: "embeddings",
-            label: "Embeddings Data",
-            type: "array",
-            of: "object",
-            properties: [
-              { name: "id", type: "string" },
-              { name: "vector", type: "array", of: "number" },
-              { name: "metadata", type: "object" }
-            ],
-            optional: false
+            name: "embeddings", label: "Embeddings Data",
+            type: "array", of: "object",
+            properties: object_definitions["embedding_object"],
+            list_mode_toggle: true # allow dynamic-list pills vs static
           },
           { name: "index_endpoint", label: "Index Endpoint ID", type: "string", optional: false },
           { name: "batch_size", label: "Batch Size", type: "integer", optional: true, default: 25, hint: "Embeddings per batch" },
-          { name: "format_type", label: "Format Type", type: "string", optional: true, default: "json", control_type: "select", pick_list: "format_types" }
+          {
+            name: "format_type", label: "Format Type", 
+            type: "string", optional: true, default: "json", 
+            control_type: "select", pick_list: "format_types",
+            toggle_hint: "Select", 
+            toggle_field: {
+              name: "format_type", label: "Format Type (custom)",
+              type: "string", control_type: "text", toggle_hint: "Use text" 
+            }
+          }
         ]
       end,
 
-      output_fields: lambda do
+      output_fields: lambda do |object_definitions|
         [
           {
             name: "formatted_batches",
             type: "array",
             of: "object",
-            properties: [
-              { name: "batch_id", type: "string" },
-              { name: "batch_number", type: "integer" },
-              {
-                name: "datapoints",
-                type: "array",
-                of: "object",
-                properties: [
-                  { name: "datapoint_id", type: "string" },
-                  { name: "feature_vector", type: "array", of: "number" },
-                  { name: "restricts", type: "object" }
-                ]
-              },
-              { name: "size", type: "integer" }
-            ]
+            properties: object_definitions["vertex_batch"]
           },
           { name: "total_batches", type: "integer" },
           { name: "total_embeddings", type: "integer" },
@@ -299,25 +288,28 @@ require 'csv'
       description: "Construct optimized RAG prompt",
       help: ->() {"Builds a Retrieval-Augmented Generation (RAG) prompt by combining user queries with relevant context documents."},
 
-      input_fields: lambda do
+      input_fields: lambda do |object_definitions|
         [
           { name: "query", label: "User Query", type: "string", optional: false, control_type: "text-area" },
           {
             name: "context_documents",
             label: "Context Documents",
-            type: "array",
-            of: "object",
-            properties: [
-              { name: "content", type: "string" },
-              { name: "relevance_score", type: "number" },
-              { name: "source", type: "string" },
-              { name: "metadata", type: "object" }
-            ],
+            type: "array", of: "object",
+            properties: object_definitions["context_document"],
+            list_mode_toggle: true, # allow dynamic-list pills vs static
             optional: false
           },
-          { name: "prompt_template", label: "Prompt Template", type: "string", optional: true, control_type: "select", pick_list: "prompt_templates" },
+          {
+            name: "prompt_template", label: "Prompt Template", default: "standard",
+            type: "string", optional: true, control_type: "select", pick_list: "prompt_templates",
+            toggle_hint: "Select", 
+            toggle_field: {
+              name: "prompt_template", label: "Template (custom text)", type: "string",
+              control_type: "text", toggle_hint: "Use text"
+            }
+          },
           { name: "max_context_length", label: "Max Context Length", type: "integer", optional: true, default: 3000 },
-          { name: "include_metadata", label: "Include Metadata", type: "boolean", optional: true, default: false },
+          { name: "include_metadata", label: "Include Metadata", type: "boolean", convert_input: "boolean_conversion", optional: true, default: false },
           { name: "system_instructions", label: "System Instructions", type: "string", optional: true, control_type: "text-area" }
         ]
       end,
@@ -346,23 +338,18 @@ require 'csv'
       description: "Check response quality and relevance",
       help: ->() {"Validates LLM-generated responses against the original query and provided context, applying custom rules and scoring for quality assurance."},
 
-      input_fields: lambda do
+      input_fields: lambda do |object_definitions|
         [
           { name: "response_text", label: "LLM Response", type: "string", optional: false, control_type: "text-area" },
           { name: "original_query", label: "Original Query", type: "string", optional: false },
-          { name: "context_provided", label: "Context Documents", type: "array", of: "string", optional: true },
+          { name: "context_provided", label: "Context Documents", type: "array", of: "string", optional: true, list_mode_toggle: true },
           {
             name: "validation_rules",
             label: "Validation Rules",
-            type: "array",
-            of: "object",
-            properties: [
-              { name: "rule_type", type: "string" },
-              { name: "rule_value", type: "string" }
-            ],
-            optional: true
+            type: "array", of: "object",
+            properties: object_definitions["validation_rule"], optional: true
           },
-          { name: "min_confidence", label: "Minimum Confidence", type: "number", optional: true, default: 0.7 }
+          { name: "min_confidence", label: "Minimum Confidence", type: "number", convert_input: "float_conversion", optional: true, default: 0.7 }
         ]
       end,
 
@@ -441,14 +428,14 @@ require 'csv'
         ]
       end,
 
-      output_fields: lambda do
+      output_fields: lambda do |object_definitions|
         [
           { name: "has_changed", type: "boolean" },
           { name: "change_type", type: "string" },
           { name: "change_percentage", type: "number" },
           { name: "added_content", type: "array", of: "string" },
           { name: "removed_content", type: "array", of: "string" },
-          { name: "modified_sections", type: "array", of: "object" },
+          { name: "modified_sections", type: "array", of: "object", properties: object_definitions["modified_section"] },
           { name: "requires_reindexing", type: "boolean" }
         ]
       end,
@@ -467,23 +454,17 @@ require 'csv'
       description: "Calculate system performance metrics",
       help: ->() {"Calculates performance metrics such as average, median, percentiles, trends, and anomaly detection from time-series data."},
 
-      input_fields: lambda do
+      input_fields: lambda do |object_definitions|
         [
           { name: "metric_type", label: "Metric Type", type: "string", optional: false, control_type: "select", pick_list: "metric_types" },
           {
-            name: "data_points",
-            label: "Data Points",
-            type: "array",
-            of: "object",
-            properties: [
-              { name: "timestamp", type: "timestamp" },
-              { name: "value", type: "number" },
-              { name: "metadata", type: "object" }
-            ],
+            name: "data_points", label: "Data Points",
+            type: "array", of: "object",
+            properties: object_definitions["data_point"], list_mode_toggle: true,
             optional: false
           },
           { name: "aggregation_period", label: "Aggregation Period", type: "string", optional: true, default: "hour", control_type: "select", pick_list: "time_periods" },
-          { name: "include_percentiles", label: "Include Percentiles", type: "boolean", optional: true, default: true }
+          { name: "include_percentiles", label: "Include Percentiles", type: "boolean", convert_input: "boolean_conversion", optional: true, default: true }
         ]
       end,
 
@@ -498,7 +479,7 @@ require 'csv'
           { name: "percentile_99", type: "number" },
           { name: "total_count", type: "integer" },
           { name: "trend", type: "string" },
-          { name: "anomalies_detected", type: "array", of: "object" }
+          { name: "anomalies_detected", type: "array", of: "object", properties: object_definitions["anomaly"] },
         ]
       end,
 
@@ -563,87 +544,54 @@ require 'csv'
       description: "Evaluate email against rules",
       help: ->() {"Evaluates an email against predefined standard patterns or custom rules stored in Data Tables, returning whether a match was found and details of the matching rule."},
 
-      input_fields: lambda do
+      config_fields: [
+        {
+          name: "rules_source", label: "Rules source", control_type: "select",
+          pick_list: [["Standard", "standard"], ["Custom (Data Tables)", "custom"]],
+          default: "standard", sticky: true
+        },
+        {
+          name: "custom_rules_table_id", label: "Rules table (Data Tables)",
+          control_type: "select", pick_list: "tables",
+          ngIf: 'config.rules_source == "custom"',
+          hint: "Required when rules_source = custom"
+        }
+      ],
+
+      input_fields: lambda do |object_definitions, _connection, config|
         [
           {
-            name: "email",
-            label: "Email",
-            type: "object",
-            optional: false,
-            properties: [
-              { name: "from_email", label: "From email", optional: true },
-              { name: "from_name",  label: "From name",  optional: true },
-              { name: "subject",    label: "Subject",    optional: true },
-              { name: "body",       label: "Body",       control_type: "text-area", optional: true },
-              { name: "headers",    label: "Headers",    type: "object", optional: true },
-              { name: "message_id", label: "Message ID", optional: true },
-              { name: "to",         label: "To",         type: "array", of: "string", optional: true },
-              { name: "cc",         label: "Cc",         type: "array", of: "string", optional: true }
-            ]
-          },
-          {
-            name: "rules_source",
-            label: "Rules source",
-            optional: false,
-            control_type: "select",
-            pick_list: [["Standard", "standard"], ["Custom (Data Tables)", "custom"]],
-            default: "standard"
-          },
-          {
-            name: "custom_rules_table_id",
-            label: "Rules table (Data Tables)",
-            optional: true,
-            control_type: "select",
-            pick_list: "tables",
-            hint: "Required when rules_source = custom",
-            ngIf: "input.rules_source == 'custom'"
+            name: "email", label: "Email", type: "object",
+            optional: false, properties: object_definitions["email_envelope"]
           },
           { name: "stop_on_first_match", type: "boolean", default: true, optional: true,
-            hint: "When true, returns as soon as a rule matches" },
-          { name: "fallback_to_standard", type: "boolean", default: true, optional: true,
-            hint: "If custom rules have no match, also evaluate built-in standard patterns" },
-          { name: "max_rules_to_apply", type: "integer", default: 500, optional: true,
-            hint: "Hard limit to guard against pathological rule sets" }
+            hint: "When true, returns as soon as a rule matches", sticky: true },
+          {
+            name: "fallback_to_standard", type: "boolean", convert_input: "boolean_conversion", 
+            default: true, optional: true, sticky: true,
+            hint: "If custom rules have no match, also evaluate built-in standard patterns" 
+          },
+          { name: "max_rules_to_apply", type: "integer", default: 100, optional: true,
+            hint: "Guardrail for pathological rule sets" },
+
+          # Retained to expose as inputs for datapill mapping, bound to config defaults
+          { name: "rules_source", type: "string", default: (config["rules_source"] || "standard"),
+            support_pills: false, optional: true },
+          { name: "custom_rules_table_id", type: "string",
+            default: config["custom_rules_table_id"], support_pills: false, optional: true }
         ]
       end,
 
-      output_fields: lambda do
+      output_fields: lambda do |object_definitions|
         [
           { name: "pattern_match", type: "boolean" },
           { name: "rule_source", type: "string" }, # "custom", "standard", or "none"
           { name: "selected_action", type: "string" },
+          { name: "top_match", type: "object", properties: object_definitions["rules_row"] },
+          { name: "matches", type: "array", of: "object", properties: object_definitions["rules_row"] },
+          { name: "standard_signals", type: "object", properties: object_definitions["standard_signals"] },
           {
-            name: "top_match",
-            type: "object",
-            properties: [
-              { name: "rule_id" }, { name: "rule_type" }, { name: "rule_pattern" },
-              { name: "action" }, { name: "priority", type: "integer" },
-              { name: "field_matched" }, { name: "sample" }
-            ]
-          },
-          {
-            name: "matches",
-            type: "array",
-            of: "object",
-            properties: [
-              { name: "rule_id" }, { name: "rule_type" }, { name: "rule_pattern" },
-              { name: "action" }, { name: "priority", type: "integer" },
-              { name: "field_matched" }, { name: "sample" }
-            ]
-          },
-          {
-            name: "standard_signals",
-            type: "object",
-            properties: [
-              { name: "sender_flags",  type: "array", of: "string" },
-              { name: "subject_flags", type: "array", of: "string" },
-              { name: "body_flags",    type: "array", of: "string" }
-            ]
-          },
-          {
-            name: "debug",
-            type: "object",
-            properties: [
+            name: "debug", type: "object", properties: [
               { name: "evaluated_rules_count", type: "integer" },
               { name: "schema_validated", type: "boolean" },
               { name: "errors", type: "array", of: "string" }
@@ -1315,7 +1263,7 @@ require 'csv'
 
     # ---------- HTTP helpers & endpoints ----------
     devapi_base: lambda do |connection|
-      host = (connection['developer_api_host'].presence || 'www').to_s
+      host = (connection['developer_api_host'].presence || 'app.eu').to_s
       "https://#{host}.workato.com"
     end,
 
@@ -1711,6 +1659,104 @@ require 'csv'
           { name: "timestamp", type: "timestamp" },
           { name: "value", type: "number" },
           { name: "metadata", type: "object" }
+        ]
+      end
+    },
+
+    email_envelope: {
+      fields: lambda do
+        [
+          { name: "from_email", label: "From email" },
+          { name: "from_name",  label: "From name"  },
+          { name: "subject",    label: "Subject"    },
+          { name: "body",       label: "Body", control_type: "text-area" },
+          { name: "headers",    label: "Headers", type: "object" },
+          { name: "message_id", label: "Message ID" },
+          { name: "to",         label: "To", type: "array", of: "string" },
+          { name: "cc",         label: "Cc", type: "array", of: "string" }
+        ]
+      end
+    },
+
+    rules_row: {
+      fields: lambda do
+        [
+          { name: "rule_id" }, { name: "rule_type" }, { name: "rule_pattern" },
+          { name: "action" }, { name: "priority", type: "integer" }, { name: "field_matched" },
+          { name: "sample" }
+        ]
+      end
+    },
+
+    standard_signals: {
+      fields: lambda do
+        [
+          { name: "sender_flags",  type: "array", of: "string" },
+          { name: "subject_flags", type: "array", of: "string" },
+          { name: "body_flags",    type: "array", of: "string" }
+        ]
+      end
+    },
+
+    validation_rule: {
+      fields: lambda do
+        [
+          { name: "rule_type" },
+          { name: "rule_value" }
+        ]
+      end
+    },
+
+    context_document: {
+      fields: lambda do
+        [
+          { name: "content", type: "string" },
+          { name: "relevance_score", type: "number" },
+          { name: "source", type: "string" },
+          { name: "metadata", type: "object" }
+        ]
+      end
+    },
+
+    diff_section: {
+      fields: lambda do
+        [
+          { name: "type" },
+          { name: "current_range", type: "array", of: "integer" },
+          { name: "previous_range", type: "array", of: "integer" },
+          { name: "current_lines", type: "array", of: "string" },
+          { name: "previous_lines", type: "array", of: "string" }
+        ]
+      end
+    },
+
+    anomaly: {
+      fields: lambda do
+        [
+          { name: "timestamp", type: "timestamp" },
+          { name: "value", type: "number" }
+        ]
+      end
+    },
+
+    vertex_datapoint: {
+      fields: lambda do
+        [
+          { name: "datapoint_id", type: "string" },
+          { name: "feature_vector", type: "array", of: "number" },
+          { name: "restricts", type: "object" }
+        ]
+      end
+    },
+
+    vertex_batch: {
+      fields: lambda do |connection, _config, object_definitions|
+        [
+          { name: "batch_id", type: "string" },
+          { name: "batch_number", type: "integer" },
+          { name: "datapoints", type: "array", of: "object",
+            properties: object_definitions["vertex_datapoint"] },
+          { name: "size", type: "integer" }
         ]
       end
     }
