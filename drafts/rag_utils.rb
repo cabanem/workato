@@ -16,12 +16,17 @@ require 'csv'
       {
         name: "developer_api_host",
         label: "Workato region",
-        hint: "Only required when using custom rules from Data Tables. Defaults to EU. Currently supports on US and EU regions.",
+        hint: "Only required when using custom rules from Data Tables. Defaults to EU. Find more information about [Workato Data Centers](https://docs.workato.com/en/workato-api.html#base-url).",
         optional: true,
         control_type: "select",
         pick_list: [
           ["US (www.workato.com)", "www"],
-          ["EU (app.eu.workato.com)", "app.eu"]
+          ["EU (app.eu.workato.com)", "app.eu"],
+          ["JP (app.jp.workato.com)", "app.jp"],
+          ["SG (app.sg.workato.com)", "app.sg"],
+          ["AU (app.au.workato.com)", "app.au"],
+          ["IL (app.il.workato.com)", "app.il"],
+          ["Developer sandbox (app.trial.workato.com)", "app.trial"]
         ],
         default: "app.eu"
       },
@@ -74,24 +79,29 @@ require 'csv'
     authorization: {
       type: "custom_auth",
       apply: lambda do |connection|
-        headers('X-Environment' => connection['environment'])
         if connection['api_token'].present?
           headers('Authorization' => "Bearer #{connection['api_token']}",
                   'Accept' => 'application/json')
         end
       end
-    }
+    },
+    base_uri: lambda do |connection|
+      host = (connection['developer_api_host'].presence || 'app.eu').to_s
+      "https://#{host}.workato.com"
+    end
   },
   
   # ==========================================
   # CONNECTION TEST
   # ==========================================
   test: lambda do |connection|
-    {
-      environment: connection["environment"],
-      chunk_size: connection["chunk_size_default"],
-      status: "connected"
-    }
+    if connection['api_token'].present?
+      # Verify token and region
+      whoami = get("#{call(:devapi_base, connection)}/api/users/me")
+      { environment: connection["environment"], account: whoami["name"] || whoami["id"], status: "connected" }
+    else
+      { environment: connection["environment"], status: "connected (no API token)" }
+    end
   end,
   
   # ==========================================
@@ -574,7 +584,9 @@ require 'csv'
             optional: true,
             control_type: "select",
             pick_list: "tables",
-            hint: "Required when rules_source = custom"
+            hint: "Required when rules_source = custom",
+            toggle_field: "rules_source",
+            toggle_state: "custom"
           },
           { name: "stop_on_first_match", type: "boolean", default: true, optional: true,
             hint: "When true, returns as soon as a rule matches" },
@@ -1342,9 +1354,13 @@ require 'csv'
       end
       arr = resp.is_a?(Array) ? resp : (resp['data'] || [])
       arr.map { |t| [t['name'] || t['id'].to_s, t['id']] }
-    rescue RestClient::ExceptionWithResponse => e
-      error("Failed to load tables: #{e.response&.body || e.message}")
-    end,
+      rescue RestClient::ExceptionWithResponse => e
+        hdrs = e.response&.headers || {}
+        cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
+        msg  = e.response&.body || e.message
+        hint = "Check API token and Developer API host (#{connection['developer_api_host'] || 'www'})."
+        error("Failed to load tables (#{e.http_code}) cid=#{cid} #{hint} #{msg}")
+      end,
 
     devapi_get_table: lambda do |connection, table_id|
       base = call(:devapi_base, connection)
@@ -1377,7 +1393,7 @@ require 'csv'
       end
       name_to_uuid = call(:schema_field_id_map, connection, schema)
 
-      select_fields = required_fields
+      select_fields = required_fields + ['$record_id', '$created_at', '$updated_at']
       where         = { "active" => { "$eq" => true } }
       order         = { by: "priority", order: "asc", case_sensitive: false }
 
@@ -1400,6 +1416,9 @@ require 'csv'
           name = name_to_uuid.key(fid) || cell['name']
           row[name.to_s] = cell['value']
         end
+        row['$record_id']  = r['record_id']  if r['record_id']
+        row['$created_at'] = r['created_at'] if r['created_at']
+        row['$updated_at'] = r['updated_at'] if r['updated_at']
         row
       end
 
@@ -1411,7 +1430,7 @@ require 'csv'
           'action'       => (row['action'] || '').to_s,
           'priority'     => call(:coerce_int, connection, row['priority'], 1000),
           'active'       => call(:coerce_bool, connection, row['active']),
-          'created_at'   => row['created_at']
+          'created_at'   => row['$created_at']
         }
       end
       .select { |r| r['active'] == true }
@@ -1775,7 +1794,11 @@ require 'csv'
     end,
 
     tables: lambda do |connection|
-      call(:pick_tables, connection)
+      if connection['api_token'].blank?
+        [[ "Please configure API token in connector connection", nil ]]
+      else
+        call(:pick_tables, connection)
+      end
     end
   }
 }
