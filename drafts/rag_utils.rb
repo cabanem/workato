@@ -1754,10 +1754,10 @@ require 'csv'
     context_document: {
       fields: lambda do
         [
-          { name: "content", type: "string" },
-          { name: "relevance_score", type: "number" },
-          { name: "source", type: "string" },
-          { name: "metadata", type: "object" }
+          { name: "content", type: "string", sticky: true },
+          { name: "relevance_score", type: "number", sticky: true },
+          { name: "source", type: "string", sticky: true },
+          { name: "metadata", type: "object", sticky: true }
         ]
       end
     },
@@ -1809,16 +1809,16 @@ require 'csv'
       fields: lambda do
         [
           { name: "chunk_size", label: "Chunk Size (tokens)", type: "integer",
-            default: 1000, convert_input: "integer_conversion",
+            default: 1000, convert_input: "integer_conversion", sticky: true,
             hint: "Maximum tokens per chunk" },
           { name: "chunk_overlap", label: "Chunk Overlap (tokens)", type: "integer",
-            default: 100, convert_input: "integer_conversion",
+            default: 100, convert_input: "integer_conversion", sticky: true,
             hint: "Token overlap between chunks" },
           { name: "preserve_sentences", label: "Preserve Sentences", type: "boolean",
-            default: true, convert_input: "boolean_conversion",
+            default: true, convert_input: "boolean_conversion", sticky: true,
             hint: "Don't break mid-sentence" },
           { name: "preserve_paragraphs", label: "Preserve Paragraphs", type: "boolean",
-            default: false, convert_input: "boolean_conversion",
+            default: false, convert_input: "boolean_conversion", sticky: true,
             hint: "Try to keep paragraphs intact" }
         ]
       end
@@ -1839,15 +1839,15 @@ require 'csv'
       fields: lambda do
         [
           { name: "remove_signatures", label: "Remove Signatures", type: "boolean",
-            default: true, convert_input: "boolean_conversion" },
+            default: true, convert_input: "boolean_conversion", sticky: true},
           { name: "remove_quotes", label: "Remove Quoted Text", type: "boolean",
-            default: true, convert_input: "boolean_conversion" },
+            default: true, convert_input: "boolean_conversion", sticky: true },
           { name: "remove_disclaimers", label: "Remove Disclaimers", type: "boolean",
-            default: true, convert_input: "boolean_conversion" },
+            default: true, convert_input: "boolean_conversion", sticky: true },
           { name: "normalize_whitespace", label: "Normalize Whitespace", type: "boolean",
-            default: true, convert_input: "boolean_conversion" },
+            default: true, convert_input: "boolean_conversion", sticky: true },
           { name: "extract_urls", label: "Extract URLs", type: "boolean",
-            default: false, convert_input: "boolean_conversion" }
+            default: false, convert_input: "boolean_conversion", sticky: true }
         ]
       end
     },
