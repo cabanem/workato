@@ -195,45 +195,45 @@ require 'csv'
           control_type: "select",
           pick_list: "similarity_types",
           default: "cosine",
-          sticky: true
+          sticky: true,
+          hint: "Controls which inputs are shown below."
         }
       ],
 
       input_fields: lambda do |_object_definitions, _connection, config|
-        [
+        fields = [
           {
             name: "vectors", label: "Vectors to Compare", type: "object",
             properties: [
-              { name: "vector_a", label: "First Vector", type: "array",
-                of: "number", list_mode_toggle: true, optional: false },
-              { name: "vector_b", label: "Second Vector", type: "array",
-                of: "number", list_mode_toggle: true, optional: false }
-            ]
-          },
-          {
-            name: "normalize", label: "Normalize Vectors", type: "boolean",
-            default: true, optional: true, hint: "Normalize vectors before comparison",
-            ngIf: 'config.similarity_method != "dot_product"'
-          },
-          { 
-            name: "similarity_type", type: "string", control_type: "text",
-            optional: true, default: config["similarity_method"], render_input: "hidden"
+              { name: "vector_a", label: "First Vector", type: "array", of: "number", list_mode_toggle: true, optional: false },
+              { name: "vector_b", label: "Second Vector", type: "array", of: "number", list_mode_toggle: true, optional: false }
+            ],
+            group: "Vectors"
           }
         ]
+        method = (config['similarity_method'] || 'cosine').to_s
+        unless method == 'dot_product'
+          fields << {
+            name: "normalize", label: "Normalize Vectors",
+            type: "boolean", default: true, optional: true,
+            hint: "Ignored for dot product.", group: "Options"
+          }
+        end
+        fields
       end,
 
       output_fields: lambda do |object_definitions|
-        object_definitions["similarity_result"] # add if you want, or keep your inline fields
+        object_definitions["similarity_result"]
       end,
 
       execute: lambda do |connection, input, _eis, _eos, config|
         input['vector_a'] = input.dig('vectors', 'vector_a')
         input['vector_b'] = input.dig('vectors', 'vector_b')
-        input['similarity_type'] ||= config['similarity_method']
+        input['similarity_type'] = (config['similarity_method'] || 'cosine')
         call(:compute_similarity, input, connection)
       end
     },
-    
+
     # ------------------------------------------
     # 4. FORMAT EMBEDDINGS BATCH
     # ------------------------------------------
@@ -891,7 +891,7 @@ require 'csv'
         b = norm.call(b)
       end
 
-      dot = a.zip(b).sum { |x, y| x * y }
+      dot   = a.zip(b).sum { |x, y| x * y }
       mag_a = Math.sqrt(a.sum { |x| x * x })
       mag_b = Math.sqrt(b.sum { |x| x * x })
 
@@ -1432,7 +1432,7 @@ require 'csv'
     # block isn't forwarded through call. Accepting an explicit operation Proc makes
     # the invocation reliable in all contexts.
     execute_with_retry: lambda do |connection, operation = nil, &block|
-      retries = 0
+      retries     = 0
       max_retries = 3
 
       begin
@@ -1440,25 +1440,32 @@ require 'csv'
         error('Internal error: execute_with_retry called without an operation') unless op
         op.call
       rescue RestClient::ExceptionWithResponse => e
-        if e.http_code == 429 && retries < max_retries
-          hdrs = e.response&.headers || {}
-          ra = hdrs["Retry-After"] || hdrs[:retry_after]
-          delay =
-            if ra.to_s =~ /^\d+$/ then ra.to_i
-            elsif ra.present?
-              begin
-                [(Time.httpdate(ra) - Time.now).ceil, 1].max
-              rescue
-                60
-              end
-            else
-              60
-            end
-          sleep([ [delay, (2 ** retries)].max, 30 ].min + rand(0..3))
+        code = e.http_code.to_i
+        if ([429] + (500..599).to_a).include?(code) && retries < max_retries
+          hdrs  = e.response&.headers || {}
+          ra    = hdrs["Retry-After"] || hdrs[:retry_after]
+          delay = if ra.to_s =~ /^\d+$/ then ra.to_i
+                  elsif ra.present?
+                    begin
+                      [(Time.httpdate(ra) - Time.now).ceil, 1].max
+                    rescue
+                      60
+                    end
+                  else
+                    2 ** retries
+                  end
+          sleep([delay, 30].min + rand(0..3))
           retries += 1
           retry
         end
         raise
+      rescue RestClient::Exceptions::OpenTimeout, RestClient::Exceptions::ReadTimeout => e
+        if retries < max_retries
+          sleep((2 ** retries) + rand(0..2))
+          retries += 1
+          retry
+        end
+        raise e
       end
     end,
 
@@ -2063,16 +2070,11 @@ require 'csv'
     email_cleaning_options: {
       fields: lambda do
         [
-          { name: "remove_signatures", label: "Remove Signatures", type: "boolean",
-            default: true, convert_input: "boolean_conversion", sticky: true},
-          { name: "remove_quotes", label: "Remove Quoted Text", type: "boolean",
-            default: true, convert_input: "boolean_conversion", sticky: true },
-          { name: "remove_disclaimers", label: "Remove Disclaimers", type: "boolean",
-            default: true, convert_input: "boolean_conversion", sticky: true },
-          { name: "normalize_whitespace", label: "Normalize Whitespace", type: "boolean",
-            default: true, convert_input: "boolean_conversion", sticky: true },
-          { name: "extract_urls", label: "Extract URLs", type: "boolean",
-            default: false, convert_input: "boolean_conversion", sticky: true }
+          { name: "remove_signatures",  label: "Remove Signatures",     type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "remove_quotes",      label: "Remove Quoted Text",    type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "remove_disclaimers", label: "Remove Disclaimers",    type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "normalize_whitespace", label: "Normalize Whitespace", type: "boolean", default: true, convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "extract_urls",       label: "Extract URLs",          type: "boolean", default: false, convert_input: "boolean_conversion", sticky: true, group: "Options" }
         ]
       end
     },
