@@ -1312,11 +1312,17 @@ require 'csv'
       "https://data-tables.workato.com"
     end,
 
-    execute_with_retry: lambda do |connection, &block|
+    # In some SDK contexts (e.g., picklists rendered during configuration), a Ruby
+    # block isn't forwarded through call. Accepting an explicit operation Proc makes
+    # the invocation reliable in all contexts.
+    execute_with_retry: lambda do |connection, operation = nil, &block|
       retries = 0
       max_retries = 3
+
       begin
-        block.call
+        op = block || operation
+        error('Internal error: execute_with_retry called without an operation') unless op
+        op.call
       rescue RestClient::ExceptionWithResponse => e
         if e.http_code == 429 && retries < max_retries
           hdrs = e.response&.headers || {}
@@ -1348,9 +1354,12 @@ require 'csv'
 
     pick_tables: lambda do |connection|
       base = call(:devapi_base, connection)
-      resp = call(:execute_with_retry, connection) do
-        get("#{base}/api/data_tables").params(page: 1, per_page: 100)
-      end
+      resp = call(
+        :execute_with_retry,
+        connection,
+        lambda { get("#{base}/api/data_tables").params(page: 1, per_page: 100) }
+      )
+
       arr = resp.is_a?(Array) ? resp : (resp['data'] || [])
       arr.map { |t| [t['name'] || t['id'].to_s, t['id']] }
       rescue RestClient::ExceptionWithResponse => e
@@ -1363,7 +1372,7 @@ require 'csv'
 
     devapi_get_table: lambda do |connection, table_id|
       base = call(:devapi_base, connection)
-      call(:execute_with_retry, connection) { get("#{base}/api/data_tables/#{table_id}") }
+      call(:execute_with_retry, connection, lambda { get("#{base}/api/data_tables/#{table_id}") })
     end,
 
     # Validate schema has all required field names
@@ -1400,7 +1409,7 @@ require 'csv'
       cont = nil
       loop do
         body  = { select: select_fields, where: where, order: order, limit: 200, continuation_token: cont }.compact
-        resp  = call(:execute_with_retry, connection) { post(url).payload(body) }
+        resp = call(:execute_with_retry, connection, lambda { post(url).payload(body) })
         recs  = resp['records'] || resp['data'] || []
         records.concat(recs)
         cont = resp['continuation_token']
@@ -1612,7 +1621,7 @@ require 'csv'
         table_info = call(:devapi_get_table, connection, table_id)
         schema     = table_info['schema'] || table_info.dig('data', 'schema') || []
 
-        required   = %w[rule_id rule_type rule_pattern action priority active created_at]
+        required   = %w[rule_id rule_type rule_pattern action priority active]
         call(:validate_rules_schema!, connection, schema, required)
 
         # Pull active rules; honor hard cap

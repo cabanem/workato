@@ -298,7 +298,7 @@ require 'digest'
                         hint: 'Each entry needs date and units; status is optional.',
                         properties: object_definitions['date_entry_fields']
                      }
-                    }
+                    
                 ]
             }
         },
