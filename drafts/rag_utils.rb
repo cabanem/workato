@@ -605,7 +605,7 @@ require 'csv'
       input_fields: lambda do |object_definitions, _connection, config|
         [
           {
-            name: "email", label: "Email", type: "object",
+            name: "email", label: "Email", type: "object", sticky: true,
             optional: false, properties: object_definitions["email_envelope"]
           },
           { name: "stop_on_first_match", type: "boolean", default: true, optional: true,
@@ -616,7 +616,7 @@ require 'csv'
             hint: "If custom rules have no match, also evaluate built-in standard patterns" 
           },
           { name: "max_rules_to_apply", type: "integer", default: 100, optional: true,
-            hint: "Guardrail for pathological rule sets" },
+            hint: "Guardrail for pathological rule sets", sticky: true },
 
           # Retained to expose as inputs for datapill mapping, bound to config defaults
           { name: "rules_source", type: "string", default: (config["rules_source"] || "standard"),
@@ -1710,14 +1710,14 @@ require 'csv'
     email_envelope: {
       fields: lambda do
         [
-          { name: "from_email", label: "From email" },
-          { name: "from_name",  label: "From name"  },
-          { name: "subject",    label: "Subject"    },
-          { name: "body",       label: "Body", control_type: "text-area" },
-          { name: "headers",    label: "Headers", type: "object" },
-          { name: "message_id", label: "Message ID" },
-          { name: "to",         label: "To", type: "array", of: "string" },
-          { name: "cc",         label: "Cc", type: "array", of: "string" }
+          { name: "from_email", label: "From email", sticky: true },
+          { name: "from_name",  label: "From name", sticky: true },
+          { name: "subject",    label: "Subject", sticky: true },
+          { name: "body",       label: "Body", control_type: "text-area", sticky: true },
+          { name: "headers",    label: "Headers", type: "object", sticky: true },
+          { name: "message_id", label: "Message ID", sticky: true },
+          { name: "to",         label: "To", type: "array", of: "string", sticky: true },
+          { name: "cc",         label: "Cc", type: "array", of: "string", sticky: true }
         ]
       end
     },
