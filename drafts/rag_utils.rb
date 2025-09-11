@@ -16,11 +16,14 @@ require 'csv'
       {
         name: "developer_api_host",
         label: "Workato region",
-        hint: "Only required when using custom rules from Data Tables",
+        hint: "Only required when using custom rules from Data Tables. Defaults to EU. Currently supports on US and EU regions.",
         optional: true,
         control_type: "select",
-        pick_list: "devapi_regions",
-        default: "www"
+        pick_list: [
+          ["US (www.workato.com)", "www"],
+          ["EU (app.eu.workato.com)", "app.eu"]
+        ],
+        default: "app.eu"
       },
       {
         name: "api_token",
@@ -35,7 +38,12 @@ require 'csv'
         hint: "Select the environment for the connector",
         optional: false,
         control_type: "select",
-        pick_list: "environments"
+        pick_list: [
+          ["Development", "development"],
+          ["Staging", "staging"],
+          ["Production", "production"]
+        ],
+        default: "development"
       },
       {
         name: "chunk_size_default",
