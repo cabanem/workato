@@ -667,38 +667,53 @@ require 'csv'
         {
           name: "rules_source", label: "Rules source", control_type: "select",
           pick_list: [["Standard", "standard"], ["Custom (Data Tables)", "custom"]],
-          default: "standard", sticky: true
+          default: "standard", sticky: true, hint: "Use 'Custom' to evaluate against a data table of rules."
         },
         {
           name: "custom_rules_table_id", label: "Rules table (Data Tables)",
           control_type: "select", pick_list: "tables",
           ngIf: 'config.rules_source == "custom"',
-          hint: "Required when rules_source = custom"
+          hint: "Required when rules_source is custom"
         }
       ],
 
       input_fields: lambda do |object_definitions, _connection, config|
-        [
+        fields = [
           {
-            name: "email", label: "Email", type: "object", sticky: true,
-            optional: false, properties: object_definitions["email_envelope"]
+            name: "email", label: "Email", type: "object", optional: false,
+            properties: object_definitions["email_envelope"], group: "Email"
           },
-          { name: "stop_on_first_match", type: "boolean", default: true, optional: true,
-            hint: "When true, returns as soon as a rule matches", sticky: true },
           {
-            name: "fallback_to_standard", type: "boolean", convert_input: "boolean_conversion", 
-            default: true, optional: true, sticky: true,
-            hint: "If custom rules have no match, also evaluate built-in standard patterns" 
+            name: "stop_on_first_match", label: "Stop on first match",
+            type: "boolean", default: true, optional: true, sticky: true,
+            hint: "When true, returns as soon as a rule matches.", group: "Execution"
           },
-          { name: "max_rules_to_apply", type: "integer", default: 100, optional: true,
-            hint: "Guardrail for pathological rule sets", sticky: true },
-
-          # Retained to expose as inputs for datapill mapping, bound to config defaults
-          { name: "rules_source", type: "string", default: (config["rules_source"] || "standard"),
-            support_pills: false, optional: true },
-          { name: "custom_rules_table_id", type: "string",
-            default: config["custom_rules_table_id"], support_pills: false, optional: true }
+          {
+            name: "fallback_to_standard", label: "Fallback to standard patterns",
+            type: "boolean", default: true, optional: true, sticky: true,
+            hint: "If custom rules have no match, also evaluate built‑in standard patterns.", group: "Execution"
+          },
+          {
+            name: "max_rules_to_apply", label: "Max rules to apply",
+            type: "integer", default: 100, optional: true,
+            hint: "Guardrail for pathological rule sets.", group: "Advanced"
+          }
         ]
+
+        # Surface the chosen table id back to the user as read-only context when relevant.
+        if (config["rules_source"] || "standard").to_s == "custom"
+          fields << {
+            name: "selected_rules_table_id",
+            label: "Selected rules table",
+            type: "string", optional: true, sticky: true,
+            hint: "From configuration above.",
+            default: config["custom_rules_table_id"],
+            render_input: "readonly", # purely informational
+            group: "Advanced"
+          }
+        end
+
+        fields
       end,
 
       output_fields: lambda do |object_definitions|
@@ -719,8 +734,9 @@ require 'csv'
         ]
       end,
 
-      execute: lambda do |connection, input|
-        call(:evaluate_email_by_rules_exec, connection, input)
+      execute: lambda do |connection, input, _eis, _eos, config|
+        # Pass config down; avoid reading mirrored inputs.
+        call(:evaluate_email_by_rules_exec, connection, input, config)
       end
     }
   },
@@ -1694,42 +1710,42 @@ require 'csv'
     end,
 
     # Orchestrates evaluation against custom rules (Data Tables) and/or standard patterns.
-    # Inputs:  input hash from action
+    # Inputs: connection, input hash from action, config_fields hash
     # Outputs: hash matching action's output_fields
-    evaluate_email_by_rules_exec: lambda do |connection, input|
-      email         = call(:normalize_email, connection, input['email'] || {})
-      source        = (input['rules_source'] || 'standard').to_s
-      stop_on       = input.key?('stop_on_first_match') ? !!input['stop_on_first_match'] : true
-      fallback_std  = input.key?('fallback_to_standard') ? !!input['fallback_to_standard'] : true
-      max_rules     = (input['max_rules_to_apply'] || 500).to_i.clamp(1, 10_000)
+    evaluate_email_by_rules_exec: lambda do |connection, input, config|
+      email = call(:normalize_email, connection, input['email'] || {})
+
+      # Prefer config_fields; fall back to inputs only for backward compatibility.
+      source   = (config && config['rules_source'] || input['rules_source'] || 'standard').to_s
+      table_id = (config && config['custom_rules_table_id'] || input['custom_rules_table_id']).to_s.presence
+
+      stop_on      = input.key?('stop_on_first_match') ? !!input['stop_on_first_match'] : true
+      fallback_std = input.key?('fallback_to_standard') ? !!input['fallback_to_standard'] : true
+      max_rules    = (input['max_rules_to_apply'] || 500).to_i.clamp(1, 10_000)
 
       selected_action = nil
       used_source     = 'none'
       matches         = []
       evaluated_count = 0
 
-      # Compute standard patterns once for both signals and fallback behavior
+      # Compute standard pattern signals once
       std = call(:evaluate_standard_patterns, connection, email)
 
       if source == 'custom'
         error('api_token is required in connector connection to read custom rules from Data Tables') unless connection['api_token'].present?
+        call(:validate_table_id, table_id) if table_id.blank? # raises if blank/invalid
 
-        table_id = (input['custom_rules_table_id'] || '').to_s
-        call(:validate_table_id, table_id)
-
-        # Fetch schema once, validate required columns
+        # Fetch schema once & validate required columns
         table_info = call(:devapi_get_table, connection, table_id)
         schema     = table_info['schema'] || table_info.dig('data', 'schema') || []
 
         required   = %w[rule_id rule_type rule_pattern action priority active]
         call(:validate_rules_schema!, connection, schema, required)
 
-        # Pull active rules; honor hard cap
-        rules = call(:dt_query_rules_all, connection, table_id, required, max_rules, schema)
-
-        # Apply rules deterministically; capture evaluated rule count
-        applied = call(:apply_rules_to_email, connection, email, rules, stop_on)
-        matches = applied[:matches]
+        # Pull active rules; honor cap
+        rules     = call(:dt_query_rules_all, connection, table_id, required, max_rules, schema)
+        applied   = call(:apply_rules_to_email, connection, email, rules, stop_on)
+        matches   = applied[:matches]
         evaluated_count = applied[:evaluated_count]
 
         if matches.any?
