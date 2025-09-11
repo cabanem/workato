@@ -458,17 +458,15 @@ require 'csv'
         [
           { name: "metric_type", label: "Metric Type", type: "string", optional: false, control_type: "select", pick_list: "metric_types" },
           {
-            name: "data_points", label: "Data Points",
-            type: "array", of: "object",
-            properties: object_definitions["data_point"], list_mode_toggle: true,
-            optional: false
+            name: "data_points", label: "Data Points", list_mode_toggle: true,
+            type: "array", of: "object", optional: false, properties: object_definitions["metric_datapoint"]
           },
           { name: "aggregation_period", label: "Aggregation Period", type: "string", optional: true, default: "hour", control_type: "select", pick_list: "time_periods" },
           { name: "include_percentiles", label: "Include Percentiles", type: "boolean", convert_input: "boolean_conversion", optional: true, default: true }
         ]
       end,
 
-      output_fields: lambda do
+      output_fields: lambda do |object_definitions|
         [
           { name: "average", type: "number" },
           { name: "median", type: "number" },
