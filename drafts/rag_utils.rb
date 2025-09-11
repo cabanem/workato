@@ -115,7 +115,8 @@ require 'csv'
     smart_chunk_text: {
       title: "Smart Chunk Text",
       subtitle: "Intelligently chunk text preserving context",
-      description: "Splits text into chunks with smart boundaries and overlap",
+      help:->() {"Splits text into chunks with smart boundaries and overlap"},
+      description: "Intelligently chunk text",
 
       input_fields: lambda do
         [
@@ -161,7 +162,8 @@ require 'csv'
     clean_email_text: {
       title: "Clean Email Text",
       subtitle: "Preprocess email content for RAG",
-      description: "Removes signatures, quotes, and normalizes email text",
+      description: "Clean and preprocess email body text",
+      help: ->() {"Cleans email body text by removing signatures, quoted text, disclaimers, and normalizing whitespace. Optionally extracts URLs."},
 
       input_fields: lambda do
         [
@@ -197,7 +199,8 @@ require 'csv'
     calculate_similarity: {
       title: "Calculate Vector Similarity",
       subtitle: "Compute similarity scores for vectors",
-      description: "Computes similarity scores for vector embeddings",
+      description: "Compute similarity scores for vector embeddings",
+      help: ->() {"Calculates similarity between two embedding vectors using cosine or Euclidean methods, with optional normalization."},
 
       input_fields: lambda do
         [
@@ -229,7 +232,8 @@ require 'csv'
     format_embeddings_batch: {
       title: "Format Embeddings for Vertex AI",
       subtitle: "Format embeddings for batch processing",
-      description: "Prepares embedding data for Vertex AI Vector Search",
+      description: "Prepare embedding data for Vertex AI Vector Search",
+      help: ->() {"Formats embedding vectors into batches suitable for Vertex AI Vector Search ingestion, supporting JSON, JSONL, and CSV formats."},
 
       input_fields: lambda do
         [
@@ -292,7 +296,8 @@ require 'csv'
     build_rag_prompt: {
       title: "Build RAG Prompt",
       subtitle: "Construct optimized RAG prompt",
-      description: "Creates a prompt with context and query for LLM",
+      description: "Construct optimized RAG prompt",
+      help: ->() {"Builds a Retrieval-Augmented Generation (RAG) prompt by combining user queries with relevant context documents."},
 
       input_fields: lambda do
         [
@@ -338,7 +343,8 @@ require 'csv'
     validate_llm_response: {
       title: "Validate LLM Response",
       subtitle: "Validate and score LLM output",
-      description: "Checks response quality and relevance",
+      description: "Check response quality and relevance",
+      help: ->() {"Validates LLM-generated responses against the original query and provided context, applying custom rules and scoring for quality assurance."},
 
       input_fields: lambda do
         [
@@ -382,7 +388,8 @@ require 'csv'
     generate_document_metadata: {
       title: "Generate Document Metadata",
       subtitle: "Extract metadata from documents",
-      description: "Generates comprehensive metadata for document indexing",
+      description: "Generate metadata for document indexing",
+      help: ->() {"Extracts metadata such as language, summary, key topics, and entities from document content to enhance indexing and retrieval."},
 
       input_fields: lambda do
         [
@@ -421,7 +428,8 @@ require 'csv'
     check_document_changes: {
       title: "Check Document Changes",
       subtitle: "Detect changes in documents",
-      description: "Compares document versions to detect modifications",
+      description: "Compare document versions to detect modifications",
+      help: ->() {"Compares current and previous document versions using hash or content analysis to detect changes, quantify differences, and determine if reindexing is needed."},
 
       input_fields: lambda do
         [
@@ -456,7 +464,8 @@ require 'csv'
     calculate_metrics: {
       title: "Calculate Performance Metrics",
       subtitle: "Calculate system performance metrics",
-      description: "Computes various performance and efficiency metrics",
+      description: "Calculate system performance metrics",
+      help: ->() {"Calculates performance metrics such as average, median, percentiles, trends, and anomaly detection from time-series data."},
 
       input_fields: lambda do
         [
@@ -504,7 +513,8 @@ require 'csv'
     optimize_batch_size: {
       title: "Optimize Batch Size",
       subtitle: "Calculate optimal batch size for processing",
-      description: "Determines optimal batch size based on performance data",
+      description: "Determine optimal batch size based on performance data",
+      help: ->() {"Analyzes historical processing data to recommend an optimal batch size that balances throughput, latency, and resource usage."},
 
       input_fields: lambda do
         [
@@ -550,7 +560,8 @@ require 'csv'
     evaluate_email_by_rules: {
       title: "Evaluate email against rules",
       subtitle: "Standard patterns or custom rules from Data Tables",
-      description: "Parses sender/subject/body and applies standard or custom rules. Returns deterministic pattern_match boolean.",
+      description: "Evaluate email against rules",
+      help: ->() {"Evaluates an email against predefined standard patterns or custom rules stored in Data Tables, returning whether a match was found and details of the matching rule."},
 
       input_fields: lambda do
         [
