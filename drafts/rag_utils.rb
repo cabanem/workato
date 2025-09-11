@@ -1690,9 +1690,9 @@ require 'csv'
     embedding_object: {
       fields: lambda do
         [
-          { name: "id", type: "string" },
-          { name: "vector", type: "array", of: "number" },
-          { name: "metadata", type: "object" }
+          { name: "id", type: "string", sticky: true },
+          { name: "vector", type: "array", of: "number", sticky: true },
+          { name: "metadata", type: "object", sticky: true }
         ]
       end
     },
@@ -1700,9 +1700,9 @@ require 'csv'
     metric_datapoint: {
       fields: lambda do
         [
-          { name: "timestamp", type: "timestamp" },
-          { name: "value", type: "number" },
-          { name: "metadata", type: "object" }
+          { name: "timestamp", type: "timestamp", sticky: true },
+          { name: "value", type: "number", sticky: true },
+          { name: "metadata", type: "object", sticky: true }
         ]
       end
     },
@@ -1745,8 +1745,8 @@ require 'csv'
     validation_rule: {
       fields: lambda do
         [
-          { name: "rule_type" },
-          { name: "rule_value" }
+          { name: "rule_type", sticky: true },
+          { name: "rule_value", sticky: true }
         ]
       end
     },
