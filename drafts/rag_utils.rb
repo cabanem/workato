@@ -306,6 +306,43 @@ require 'csv'
           ],
           default: "template",
           sticky: true
+        },
+        {
+          name: "template_source",
+          label: "Template source",
+          control_type: "select",
+          pick_list: [["Built-in", "builtin"], ["Custom (Data Tables)", "custom"]],
+          default: "builtin",
+          sticky: true
+        },
+        {
+          name: "templates_table_id",
+          label: "Templates table (Data Tables)",
+          control_type: "select",
+          pick_list: "tables",
+          ngIf: 'config.template_source == "custom"',
+          hint: "Required when Template source = Custom"
+        },
+        {
+          name: "template_display_field",
+          label: "Display field name",
+          type: "string", default: "name", optional: true, sticky: true,
+          ngIf: 'config.template_source == "custom"',
+          hint: "Column shown in the dropdown"
+        },
+        {
+          name: "template_value_field",
+          label: "Value field name",
+          type: "string", default: "", optional: true, sticky: true,
+          ngIf: 'config.template_source == "custom"',
+          hint: "Stored value for the selection. Leave blank to use the Record ID."
+        },
+        {
+          name: "template_content_field",
+          label: "Content field name",
+          type: "string", default: "content", optional: true, sticky: true,
+          ngIf: 'config.template_source == "custom"',
+          hint: "Column containing the prompt text"
         }
       ],
 
@@ -323,7 +360,7 @@ require 'csv'
         if config["prompt_mode"] == "template"
           fields << {
             name: "prompt_template", label: "Prompt Template",
-            type: "string", default: "standard", group: "Template Settings",
+            type: "string", group: "Template Settings",
             control_type: "select", pick_list: "prompt_templates", optional: true,
             toggle_hint: "Select",
             toggle_field: {
@@ -366,11 +403,49 @@ require 'csv'
         ]
       end,
 
-      execute: lambda do |_connection, input, _eis, _eos, _config|
+      execute: lambda do |connection, input, _eis, _eos, config|
         if input['advanced_settings']
           input.merge!(input['advanced_settings'])
           input.delete('advanced_settings')
         end
+
+        if config["prompt_mode"] == "template"
+          source = (config["template_source"] || "builtin").to_s
+          sel    = (input["prompt_template"] || "").to_s
+
+          if source == "custom" && config["templates_table_id"].present? && sel.present?
+            # If the user selected from the dropdown (value or record_id), look up content.
+            # If they toggled to text (inline multiline or long), use it directly.
+            inline = (sel.include?("\n") || sel.length > 200)
+
+            unless inline
+              resolved = call(
+                :resolve_template_selection,
+                connection,
+                config,
+                sel # either record_id or value-field value
+              )
+              if resolved && resolved["content"].to_s.strip.length.positive?
+                input["template_content"] = resolved["content"].to_s
+                # Add metadata users may log later
+                input["prompt_metadata"] = {
+                  template_source: "custom",
+                  templates_table_id: config["templates_table_id"],
+                  template_value: sel,
+                  template_display: resolved["display"]
+                }.compact
+              end
+            else
+              input["template_content"] = sel
+              input["prompt_metadata"] = { template_source: "inline" }
+            end
+          elsif sel.present? && (sel.include?("\n") || sel.length > 200)
+            # Built-in path but user toggled to inline text
+            input["template_content"] = sel
+            input["prompt_metadata"] = { template_source: "inline" }
+          end
+        end
+
         call(:construct_rag_prompt, input)
       end
     },
@@ -833,7 +908,9 @@ require 'csv'
         similarity_percentage: percent,
         is_similar: similar,
         similarity_type: type,
-        computation_time_ms: ((Time.now - start_time) * 1000).round
+        computation_time_ms: ((Time.now - start_time) * 1000).round,
+        threshold_used: threshold,
+        vectors_normalized: normalize
       }
     end,
 
@@ -887,16 +964,17 @@ require 'csv'
     construct_rag_prompt: lambda do |input|
       query = input['query'].to_s
       context_docs = Array(input['context_documents'] || [])
-      template = (input['prompt_template'] || 'standard').to_s
+      template_key = (input['prompt_template'] || 'standard').to_s
       max_length = (input['max_context_length'] || 3000).to_i
       include_metadata = !!input['include_metadata']
       system_instructions = input['system_instructions'].to_s
+      template_content = input['template_content'].to_s # <- from table or inline
 
+      # Order context by relevance and clamp to max length
       sorted_context = context_docs.sort_by { |doc| (doc['relevance_score'] || 0) }.reverse
 
       context_parts = []
       total_tokens = 0
-
       sorted_context.each do |doc|
         content = doc['content'].to_s
         doc_tokens = (content.length / 4.0).ceil
@@ -908,28 +986,47 @@ require 'csv'
         context_parts << part
         total_tokens += doc_tokens
       end
-
       context_text = context_parts.join("\n\n---\n\n")
 
-      prompt = case template
-               when 'standard'
-                 "Context:\n#{context_text}\n\nQuery: #{query}\n\nAnswer:"
-               when 'customer_service'
-                 "You are a customer service assistant. Use the following context to answer the customer's question.\n\nContext:\n#{context_text}\n\nCustomer Question: #{query}\n\nResponse:"
-               when 'technical'
-                 "You are a technical support specialist. Use the provided context to solve the technical issue.\n\nContext:\n#{context_text}\n\nTechnical Issue: #{query}\n\nSolution:"
-               when 'sales'
-                 "You are a sales representative. Use the context to address the sales inquiry.\n\nContext:\n#{context_text}\n\nSales Inquiry: #{query}\n\nResponse:"
-               else
-                 "#{system_instructions}\n\nContext:\n#{context_text}\n\nQuery: #{query}\n\nAnswer:"
-               end
+      # 1) If explicit template content provided (table/inline), use it.
+      # 2) Else use a built-in skeleton that already contains placeholders.
+      base =
+        if template_content.strip.length.positive?
+          template_content
+        else
+          case template_key
+          when 'standard'
+            "Context:\n{{context}}\n\nQuery: {{query}}\n\nAnswer:"
+          when 'customer_service'
+            "You are a customer service assistant.\n\nContext:\n{{context}}\n\nCustomer Question: {{query}}\n\nResponse:"
+          when 'technical'
+            "You are a technical support specialist.\n\nContext:\n{{context}}\n\nTechnical Issue: {{query}}\n\nSolution:"
+          when 'sales'
+            "You are a sales representative.\n\nContext:\n{{context}}\n\nSales Inquiry: {{query}}\n\nResponse:"
+          else
+            header = system_instructions.strip
+            header = "Instructions:\n#{header}\n\n" if header.length.positive?
+            "#{header}Context:\n{{context}}\n\nQuery: {{query}}\n\nAnswer:"
+          end
+        end
+
+      # Replace placeholders; if none are present, append the default footer
+      compiled = base.dup
+      compiled.gsub!(/{{\s*context\s*}}/i, context_text)
+      compiled.gsub!(/{{\s*query\s*}}/i,   query)
+      unless base.match?(/{{\s*context\s*}}/i) || base.match?(/{{\s*query\s*}}/i)
+        compiled << "\n\nContext:\n#{context_text}\n\nQuery: #{query}\n\nAnswer:"
+      end
 
       {
-        formatted_prompt: prompt,
-        token_count: (prompt.length / 4.0).ceil,
+        formatted_prompt: compiled,
+        token_count: (compiled.length / 4.0).ceil,
         context_used: context_parts.length,
         truncated: context_parts.length < sorted_context.length,
-        prompt_metadata: { template: template, context_docs_used: context_parts.length, total_context_docs: sorted_context.length }
+        prompt_metadata: (input['prompt_metadata'] || {}).merge(
+          template: template_key,
+          using_template_content: template_content.strip.length.positive?
+        )
       }
     end,
 
@@ -1665,7 +1762,119 @@ require 'csv'
           errors: []
         }
       }
+    end,
+
+    # ----- Templates (Data Tables) -----
+
+    # Build a dropdown from a templates table
+    pick_templates_from_table: lambda do |connection, config|
+      error('api_token is required in connector connection to read templates from Data Tables') unless connection['api_token'].present?
+
+      table_id  = (config['templates_table_id'] || '').to_s.strip
+      call(:validate_table_id, table_id)
+
+      display  = (config['template_display_field']  || 'name').to_s
+      valuef   = (config['template_value_field']    || '').to_s
+      contentf = (config['template_content_field']  || 'content').to_s
+
+      # Load schema once, validate columns
+      table_info = call(:devapi_get_table, connection, table_id)
+      schema     = table_info['schema'] || table_info.dig('data', 'schema') || []
+      names      = Array(schema).map { |c| (c['name'] || '').to_s }
+      missing    = [display, contentf].reject { |n| names.include?(n) }
+      error("Templates table missing required fields: #{missing.join(', ')}") unless missing.empty?
+
+      base   = call(:dt_records_base, connection)
+      url    = "#{base}/api/v1/tables/#{table_id}/query"
+      select = [display, contentf]
+      select << valuef if valuef.present?
+      select << 'active' if names.include?('active')
+      where  = names.include?('active') ? { 'active' => { '$eq' => true } } : nil
+      order  = { by: display, order: 'asc', case_sensitive: false }
+
+      records = []
+      cont = nil
+      loop do
+        body = { select: select.uniq, where: where, order: order, limit: 200, continuation_token: cont }.compact
+        resp = call(:execute_with_retry, connection, lambda { post(url).payload(body) })
+        recs = resp['records'] || resp['data'] || []
+        records.concat(recs)
+        cont = resp['continuation_token']
+        break if cont.blank? || records.length >= 2000
+      end
+
+      # Decode rows to name/value pairs
+      name_to_uuid = call(:schema_field_id_map, connection, schema)
+      rows = records.map do |r|
+        doc = r['document'] || []
+        row = {}
+        doc.each do |cell|
+          fid  = (cell['field_id'] || '').to_s
+          name = name_to_uuid.key(fid) || cell['name']
+          row[name.to_s] = cell['value']
+        end
+        row['$record_id'] = r['record_id'] if r['record_id']
+        row
+      end
+
+      opts = rows.map do |row|
+        disp = (row[display] || row['$record_id']).to_s
+        val  = valuef.present? ? row[valuef].to_s : row['$record_id'].to_s
+        [disp, val]
+      end
+
+      opts.empty? ? [[ "No templates found in selected table", nil ]] : opts
+    rescue RestClient::ExceptionWithResponse => e
+      hdrs = e.response&.headers || {}
+      cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
+      msg  = e.response&.body || e.message
+      error("Failed to load templates (#{e.http_code}) cid=#{cid} #{msg}")
+    end,
+
+    # Resolve a selected value (record id or value-field) to its content/display
+    resolve_template_selection: lambda do |connection, config, selected_value|
+      table_id   = (config['templates_table_id'] || '').to_s
+      valuef     = (config['template_value_field']   || '').to_s
+      contentf   = (config['template_content_field'] || 'content').to_s
+      displayf   = (config['template_display_field'] || 'name').to_s
+
+      table_info = call(:devapi_get_table, connection, table_id)
+      schema     = table_info['schema'] || table_info.dig('data', 'schema') || []
+
+      base = call(:dt_records_base, connection)
+
+      if valuef.present?
+        body = { select: [valuef, displayf, contentf, '$record_id'].uniq,
+                where:  { valuef => { '$eq' => selected_value } },
+                limit:  1 }
+        resp = call(:execute_with_retry, connection, lambda { post("#{base}/api/v1/tables/#{table_id}/query").payload(body) })
+        rec  = (resp['records'] || resp['data'] || [])[0]
+        return nil unless rec
+        row  = call(:dt_decode_record_doc, connection, schema, rec)
+        { 'value' => selected_value, 'display' => row[displayf], 'content' => row[contentf], 'record_id' => row['$record_id'] }
+      else
+        rec = call(:execute_with_retry, connection, lambda { get("#{base}/api/v1/tables/#{table_id}/records/#{selected_value}") })
+        row = call(:dt_decode_record_doc, connection, schema, rec)
+        { 'value' => selected_value, 'display' => row[displayf], 'content' => row[contentf], 'record_id' => selected_value }
+      end
+    end,
+
+    # Decode a record/document to name->value map using schema
+    dt_decode_record_doc: lambda do |connection, schema, record|
+      name_to_uuid = call(:schema_field_id_map, connection, schema)
+      doc = record['document'] || []
+      row = {}
+      doc.each do |cell|
+        fid  = (cell['field_id'] || '').to_s
+        name = name_to_uuid.key(fid) || cell['name']
+        row[name.to_s] = cell['value']
+      end
+      row['$record_id']  = record['record_id']  if record['record_id']
+      row['$created_at'] = record['created_at'] if record['created_at']
+      row['$updated_at'] = record['updated_at'] if record['updated_at']
+      row
     end
+
   },
   
   # ==========================================
@@ -1947,14 +2156,22 @@ require 'csv'
       ]
     end,
 
-    prompt_templates: lambda do
-      [
-        ["Standard RAG", "standard"],
-        ["Customer Service", "customer_service"],
-        ["Technical Support", "technical"],
-        ["Sales Inquiry", "sales"],
-        ["Custom", "custom"]
-      ]
+    prompt_templates: lambda do |connection, config|
+      src = (config['template_source'] || 'builtin').to_s
+      if src == 'custom'
+        if connection['api_token'].blank? || (config['templates_table_id'] || '').to_s.strip.empty?
+          [[ "Configure API token and Templates table in action config", nil ]]
+        else
+          call(:pick_templates_from_table, connection, config)
+        end
+      else
+        [
+          ["Standard RAG", "standard"],
+          ["Customer Service", "customer_service"],
+          ["Technical Support", "technical"],
+          ["Sales Inquiry", "sales"]
+        ]
+      end
     end,
 
     file_types: lambda do
