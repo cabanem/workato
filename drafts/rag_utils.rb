@@ -780,52 +780,62 @@
   methods: {
     
     chunk_text_with_overlap: lambda do |input|
-      text = input["text"]
-      chunk_size = input["chunk_size"] || 1000
-      overlap = input["chunk_overlap"] || 100
-      
-      # Token estimation (rough: 1 token ≈ 4 chars)
-      chars_per_chunk = chunk_size * 4
-      char_overlap = overlap * 4
-      
-      chunks = []
-      chunk_index = 0
-      position = 0
-      
+      text = input['text'].to_s
+      chunk_size = (input['chunk_size'] || 1000).to_i
+      overlap    = (input['chunk_overlap'] || 100).to_i
+      preserve_sentences  = !!input['preserve_sentences']
+      preserve_paragraphs = !!input['preserve_paragraphs']
+
+      overlap = [overlap, [chunk_size - 1, 0].max].min
+      chars_per_chunk = [chunk_size, 1].max * 4
+      char_overlap    = overlap * 4
+
+      chunks, chunk_index, position = [], 0, 0
+
       while position < text.length
-        chunk_end = [position + chars_per_chunk, text.length].min
-        
-        # Find sentence boundary if requested
-        if input["preserve_sentences"] && chunk_end < text.length
-          last_period = text[position..chunk_end].rindex(/[.!?]\s/)
-          chunk_end = position + last_period + 1 if last_period
+        tentative_end = [position + chars_per_chunk, text.length].min
+        chunk_end = tentative_end
+        segment = text[position...tentative_end]
+
+        if preserve_paragraphs && tentative_end < text.length
+          if (matches = segment.scan(/\n{2,}/)).any?
+            last = matches.last
+            idx  = segment.rindex(last)
+            chunk_end = position + idx + last.length
+          end
         end
-        
-        chunk_text = text[position..chunk_end-1]
-        
+
+        if preserve_sentences && chunk_end == tentative_end && tentative_end < text.length
+          if (matches = segment.scan(/[.!?]["')\]]?\s/)).any?
+            last = matches.last
+            idx  = segment.rindex(last)
+            chunk_end = position + idx + last.length
+          end
+        end
+
+        chunk_end = tentative_end if chunk_end <= position
+        chunk_text = text[position...chunk_end]
+
         chunks << {
-          chunk_id: "chunk_#{chunk_index}",
+          chunk_id:    "chunk_#{chunk_index}",
           chunk_index: chunk_index,
-          text: chunk_text,
+          text:        chunk_text,
           token_count: (chunk_text.length / 4.0).ceil,
-          start_char: position,
-          end_char: chunk_end,
-          metadata: {
-            has_overlap: chunk_index > 0,
-            is_final: chunk_end >= text.length
-          }
+          start_char:  position,
+          end_char:    chunk_end,
+          metadata:    { has_overlap: chunk_index.positive?, is_final: chunk_end >= text.length }
         }
-        
-        position = chunk_end - char_overlap
-        position = chunk_end if position >= text.length
+
+        break if chunk_end >= text.length
+        # guaranteed forward movement
+        next_position = chunk_end - char_overlap
+        position = next_position > position ? next_position : chunk_end # always advance
         chunk_index += 1
       end
-      
-      {
-        chunks: chunks,
+
+      { chunks: chunks,
         total_chunks: chunks.length,
-        total_tokens: chunks.sum { |c| c[:token_count] }
-      }
+        total_tokens: chunks.sum { |c| c[:token_count] } }
     end,
     
     process_email_text: lambda do |input|
