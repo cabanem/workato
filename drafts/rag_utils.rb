@@ -14,6 +14,22 @@ require 'csv'
   connection: {
     fields: [
       {
+        name: "developer_api_host",
+        label: "Workato region",
+        hint: "Only required when using custom rules from Data Tables",
+        optional: true,
+        control_type: "select",
+        pick_list: "devapi_regions",
+        default: "www"
+      },
+      {
+        name: "api_token",
+        label: "API token (Bearer)",
+        hint: "Workspace admin → API clients → API keys",
+        control_type: "password",
+        optional: true
+      },
+      {
         name: "environment",
         label: "Environment",
         hint: "Select the environment for the connector",
@@ -49,9 +65,12 @@ require 'csv'
     
     authorization: {
       type: "custom_auth",
-      
       apply: lambda do |connection|
         headers('X-Environment' => connection['environment'])
+        if connection['api_token'].present?
+          headers('Authorization' => "Bearer #{connection['api_token']}",
+                  'Accept' => 'application/json')
+        end
       end
     }
   },
@@ -504,6 +523,107 @@ require 'csv'
 
       execute: lambda do |_connection, input|
         call(:calculate_optimal_batch, input)
+      end
+    },
+
+    # ------------------------------------------
+    # 11. EVALUATE EMAIL BY RULES
+    # ------------------------------------------
+    evaluate_email_by_rules: {
+      title: "Evaluate email against rules",
+      subtitle: "Standard patterns or custom rules from Data Tables",
+      description: "Parses sender/subject/body and applies standard or custom rules. Returns deterministic pattern_match boolean.",
+
+      input_fields: lambda do
+        [
+          {
+            name: "email",
+            label: "Email",
+            type: "object",
+            optional: false,
+            properties: [
+              { name: "from_email", label: "From email", optional: true },
+              { name: "from_name",  label: "From name",  optional: true },
+              { name: "subject",    label: "Subject",    optional: true },
+              { name: "body",       label: "Body",       control_type: "text-area", optional: true },
+              { name: "headers",    label: "Headers",    type: "object", optional: true },
+              { name: "message_id", label: "Message ID", optional: true },
+              { name: "to",         label: "To",         type: "array", of: "string", optional: true },
+              { name: "cc",         label: "Cc",         type: "array", of: "string", optional: true }
+            ]
+          },
+          {
+            name: "rules_source",
+            label: "Rules source",
+            optional: false,
+            control_type: "select",
+            pick_list: [["Standard", "standard"], ["Custom (Data Tables)", "custom"]],
+            default: "standard"
+          },
+          {
+            name: "custom_rules_table_id",
+            label: "Rules table (Data Tables)",
+            optional: true,
+            control_type: "select",
+            pick_list: "tables",
+            hint: "Required when rules_source = custom"
+          },
+          { name: "stop_on_first_match", type: "boolean", default: true, optional: true,
+            hint: "When true, returns as soon as a rule matches" },
+          { name: "fallback_to_standard", type: "boolean", default: true, optional: true,
+            hint: "If custom rules have no match, also evaluate built-in standard patterns" },
+          { name: "max_rules_to_apply", type: "integer", default: 500, optional: true,
+            hint: "Hard limit to guard against pathological rule sets" }
+        ]
+      end,
+
+      output_fields: lambda do
+        [
+          { name: "pattern_match", type: "boolean" },
+          { name: "rule_source", type: "string" }, # "custom", "standard", or "none"
+          { name: "selected_action", type: "string" },
+          {
+            name: "top_match",
+            type: "object",
+            properties: [
+              { name: "rule_id" }, { name: "rule_type" }, { name: "rule_pattern" },
+              { name: "action" }, { name: "priority", type: "integer" },
+              { name: "field_matched" }, { name: "sample" }
+            ]
+          },
+          {
+            name: "matches",
+            type: "array",
+            of: "object",
+            properties: [
+              { name: "rule_id" }, { name: "rule_type" }, { name: "rule_pattern" },
+              { name: "action" }, { name: "priority", type: "integer" },
+              { name: "field_matched" }, { name: "sample" }
+            ]
+          },
+          {
+            name: "standard_signals",
+            type: "object",
+            properties: [
+              { name: "sender_flags",  type: "array", of: "string" },
+              { name: "subject_flags", type: "array", of: "string" },
+              { name: "body_flags",    type: "array", of: "string" }
+            ]
+          },
+          {
+            name: "debug",
+            type: "object",
+            properties: [
+              { name: "evaluated_rules_count", type: "integer" },
+              { name: "schema_validated", type: "boolean" },
+              { name: "errors", type: "array", of: "string" }
+            ]
+          }
+        ]
+      end,
+
+      execute: lambda do |connection, input|
+        call(:evaluate_email_by_rules_exec, connection, input)
       end
     }
   },
@@ -1161,6 +1281,352 @@ require 'csv'
         modified_sections: modified_sections,
         line_change_percentage: line_change_percentage
       }
+    end,
+
+    # ---------- HTTP helpers & endpoints ----------
+    devapi_base: lambda do |connection|
+      host = (connection['developer_api_host'].presence || 'www').to_s
+      "https://#{host}.workato.com"
+    end,
+
+    dt_records_base: lambda do |_connection|
+      "https://data-tables.workato.com"
+    end,
+
+    execute_with_retry: lambda do |connection, &block|
+      retries = 0
+      max_retries = 3
+      begin
+        block.call
+      rescue RestClient::ExceptionWithResponse => e
+        if e.http_code == 429 && retries < max_retries
+          hdrs = e.response&.headers || {}
+          ra = hdrs["Retry-After"] || hdrs[:retry_after]
+          delay =
+            if ra.to_s =~ /^\d+$/ then ra.to_i
+            elsif ra.present?
+              begin
+                [(Time.httpdate(ra) - Time.now).ceil, 1].max
+              rescue
+                60
+              end
+            else
+              60
+            end
+          sleep([delay, (2 ** retries)].max + rand(0..3))
+          retries += 1
+          retry
+        end
+        raise
+      end
+    end,
+
+    validate_table_id: lambda do |table_id|
+      error("Table ID is required") if table_id.blank?
+      uuid = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
+      error("Table ID must be a UUID") unless table_id.to_s.match?(uuid)
+    end,
+
+    pick_tables: lambda do |connection|
+      base = call(:devapi_base, connection)
+      resp = call(:execute_with_retry, connection) do
+        get("#{base}/api/data_tables").params(page: 1, per_page: 100)
+      end
+      arr = resp.is_a?(Array) ? resp : (resp['data'] || [])
+      arr.map { |t| [t['name'] || t['id'].to_s, t['id']] }
+    rescue RestClient::ExceptionWithResponse => e
+      error("Failed to load tables: #{e.response&.body || e.message}")
+    end,
+
+    devapi_get_table: lambda do |connection, table_id|
+      base = call(:devapi_base, connection)
+      call(:execute_with_retry, connection) { get("#{base}/api/data_tables/#{table_id}") }
+    end,
+
+    # Validate schema has all required field names
+    validate_rules_schema!: lambda do |_connection, schema, required_names|
+      names = Array(schema).map { |c| (c['name'] || '').to_s }
+      missing = required_names.reject { |n| names.include?(n) }
+      error("Rules table missing required fields: #{missing.join(', ')}") unless missing.empty?
+    end,
+
+    # Build map: field_name -> field_id for quick document resolution
+    schema_field_id_map: lambda do |_connection, schema|
+      Hash[
+        Array(schema).map { |c| [ (c['name'] || '').to_s, (c['field_id'] || c['id'] || '').to_s ] }
+      ]
+    end,
+
+    # Query all active rules (Data Tables v1, paged)
+    # Accepts optional schema to avoid an extra metadata call.
+    dt_query_rules_all: lambda do |connection, table_id, required_fields, max_rules, schema = nil|
+      base = call(:dt_records_base, connection)
+      url  = "#{base}/api/v1/tables/#{table_id}/query"
+
+      schema ||= begin
+        table = call(:devapi_get_table, connection, table_id)
+        table['schema'] || table.dig('data', 'schema') || []
+      end
+      name_to_uuid = call(:schema_field_id_map, connection, schema)
+
+      select_fields = required_fields
+      where         = { "active" => { "$eq" => true } }
+      order         = { by: "priority", order: "asc", case_sensitive: false }
+
+      records = []
+      cont = nil
+      loop do
+        body  = { select: select_fields, where: where, order: order, limit: 200, continuation_token: cont }.compact
+        resp  = call(:execute_with_retry, connection) { post(url).payload(body) }
+        recs  = resp['records'] || resp['data'] || []
+        records.concat(recs)
+        cont = resp['continuation_token']
+        break if cont.blank? || records.length >= max_rules
+      end
+
+      decoded = records.map do |r|
+        doc = r['document'] || []
+        row = {}
+        doc.each do |cell|
+          fid  = (cell['field_id'] || '').to_s
+          name = name_to_uuid.key(fid) || cell['name']
+          row[name.to_s] = cell['value']
+        end
+        row
+      end
+
+      decoded.map do |row|
+        {
+          'rule_id'      => (row['rule_id'] || '').to_s,
+          'rule_type'    => (row['rule_type'] || '').to_s.downcase,
+          'rule_pattern' => (row['rule_pattern'] || '').to_s,
+          'action'       => (row['action'] || '').to_s,
+          'priority'     => call(:coerce_int, connection, row['priority'], 1000),
+          'active'       => call(:coerce_bool, connection, row['active']),
+          'created_at'   => row['created_at']
+        }
+      end
+      .select { |r| r['active'] == true }
+      .sort_by { |r| r['priority'] }
+      .first(max_rules)
+    end,
+
+    coerce_bool: lambda do |_connection, v|
+      return true  if v == true || v.to_s.strip.downcase == 'true' || v.to_s == '1'
+      return false if v == false || v.to_s.strip.downcase == 'false' || v.to_s == '0'
+      !!v
+    end,
+
+    coerce_int: lambda do |_connection, v, default|
+      Integer(v)
+    rescue
+      default.to_i
+    end,
+
+    # Compile a safe regex from user pattern.
+    # Supports:
+    #  - /.../ style → treated as regex
+    #  - re:...      → treated as regex
+    #  - otherwise   → case-insensitive substring (escaped)
+    safe_regex: lambda do |_connection, pattern|
+      p = pattern.to_s.strip
+      max_len = 512
+      p = p[0, max_len]
+      if p.start_with?('/') && p.end_with?('/') && p.length >= 2
+        Regexp.new(p[1..-2], Regexp::IGNORECASE)
+      elsif p.start_with?('re:')
+        Regexp.new(p.sub(/^re:/i, ''), Regexp::IGNORECASE)
+      else
+        Regexp.new(Regexp.escape(p), Regexp::IGNORECASE)
+      end
+    rescue RegexpError => e
+      error("Invalid regex pattern in rules: #{e.message}")
+    end,
+
+    normalize_email: lambda do |_connection, email|
+      {
+        from_email: (email['from_email'] || '').to_s,
+        from_name:  (email['from_name']  || '').to_s,
+        subject:    (email['subject']    || '').to_s,
+        body:       (email['body']       || '').to_s,
+        headers:    email['headers'].is_a?(Hash) ? email['headers'] : {},
+        message_id: (email['message_id'] || '').to_s
+      }
+    end,
+
+    # Built-in standard patterns (conservative defaults)
+    evaluate_standard_patterns: lambda do |_connection, email|
+      from = "#{email[:from_name]} <#{email[:from_email]}>"
+      subj = email[:subject].to_s
+      body = email[:body].to_s
+
+      sender_rx = [
+        /\bno[-_.]?reply\b/i,
+        /\bdo[-_.]?not[-_.]?reply\b/i,
+        /\bdonotreply\b/i,
+        /\bnewsletter\b/i,
+        /\bmailer\b/i,
+        /\bautomated\b/i
+      ]
+      subject_rx = [
+        /\border\s*(no\.|#)?\s*\d+/i,
+        /\b(order|purchase)\s+confirmation\b/i,
+        /\bconfirmation\b/i,
+        /\breceipt\b/i,
+        /\binvoice\b/i,
+        /\b(password\s*reset|verification\s*code|two[-\s]?factor)\b/i
+      ]
+      body_rx = [
+        /\bunsubscribe\b/i,
+        /\bmanage (your )?preferences\b/i,
+        /\bautomated (message|email)\b/i,
+        /\bdo not reply\b/i,
+        /\bview (this|in) browser\b/i
+      ]
+
+      matches = []
+      flags_sender  = sender_rx.select { |rx| from.match?(rx) }.map(&:source)
+      flags_subject = subject_rx.select { |rx| subj.match?(rx) }.map(&:source)
+      flags_body    = body_rx.select  { |rx| body.match?(rx) }.map(&:source)
+
+      flags_sender.each do |src|
+        m = from.match(Regexp.new(src, Regexp::IGNORECASE))
+        matches << { rule_id: "std:sender:#{src}", rule_type: "sender", rule_pattern: src,
+                    action: nil, priority: 1000, field_matched: "sender", sample: m&.to_s }
+      end
+      flags_subject.each do |src|
+        m = subj.match(Regexp.new(src, Regexp::IGNORECASE))
+        matches << { rule_id: "std:subject:#{src}", rule_type: "subject", rule_pattern: src,
+                    action: nil, priority: 1000, field_matched: "subject", sample: m&.to_s }
+      end
+      flags_body.each do |src|
+        m = body.match(Regexp.new(src, Regexp::IGNORECASE))
+        matches << { rule_id: "std:body:#{src}", rule_type: "body", rule_pattern: src,
+                    action: nil, priority: 1000, field_matched: "body", sample: m&.to_s }
+      end
+
+      { matches: matches, sender_flags: flags_sender, subject_flags: flags_subject, body_flags: flags_body }
+    end,
+
+    # Apply custom rules to an email. Each rule is a hash with normalized fields.
+    # Returns: { matches: [...], evaluated_count: <int> }
+    apply_rules_to_email: lambda do |connection, email, rules, stop_on_first|
+      from    = "#{email[:from_name]} <#{email[:from_email]}>"
+      subject = email[:subject].to_s
+      body    = email[:body].to_s
+
+      out       = []
+      evaluated = 0
+
+      rules.each do |r|
+        rt      = r['rule_type']
+        pattern = r['rule_pattern']
+        next if rt.blank? || pattern.blank?
+
+        rx = call(:safe_regex, connection, pattern)
+
+        field = case rt
+                when 'sender'  then 'sender'
+                when 'subject' then 'subject'
+                when 'body'    then 'body'
+                else next
+                end
+
+        haystack = case field
+                  when 'sender'  then from
+                  when 'subject' then subject
+                  when 'body'    then body
+                  end
+
+        evaluated += 1
+        m = haystack.match(rx)
+        if m
+          out << {
+            rule_id:       r['rule_id'],
+            rule_type:     rt,
+            rule_pattern:  pattern,
+            action:        r['action'],
+            priority:      r['priority'],
+            field_matched: field,
+            sample:        m.to_s
+          }
+          break if stop_on_first
+        end
+      end
+
+      { matches: out.sort_by { |h| [h[:priority] || 1000, h[:rule_id].to_s] },
+        evaluated_count: evaluated }
+    end,
+
+    # Orchestrates evaluation against custom rules (Data Tables) and/or standard patterns.
+    # Inputs:  input hash from action
+    # Outputs: hash matching action's output_fields
+    evaluate_email_by_rules_exec: lambda do |connection, input|
+      email         = call(:normalize_email, connection, input['email'] || {})
+      source        = (input['rules_source'] || 'standard').to_s
+      stop_on       = input.key?('stop_on_first_match') ? !!input['stop_on_first_match'] : true
+      fallback_std  = input.key?('fallback_to_standard') ? !!input['fallback_to_standard'] : true
+      max_rules     = (input['max_rules_to_apply'] || 500).to_i.clamp(1, 10_000)
+
+      selected_action = nil
+      used_source     = 'none'
+      matches         = []
+      evaluated_count = 0
+
+      # Compute standard patterns once for both signals and fallback behavior
+      std = call(:evaluate_standard_patterns, connection, email)
+
+      if source == 'custom'
+        error('api_token is required in connector connection to read custom rules from Data Tables') unless connection['api_token'].present?
+
+        table_id = (input['custom_rules_table_id'] || '').to_s
+        call(:validate_table_id, table_id)
+
+        # Fetch schema once, validate required columns
+        table_info = call(:devapi_get_table, connection, table_id)
+        schema     = table_info['schema'] || table_info.dig('data', 'schema') || []
+
+        required   = %w[rule_id rule_type rule_pattern action priority active created_at]
+        call(:validate_rules_schema!, connection, schema, required)
+
+        # Pull active rules; honor hard cap
+        rules = call(:dt_query_rules_all, connection, table_id, required, max_rules, schema)
+
+        # Apply rules deterministically; capture evaluated rule count
+        applied = call(:apply_rules_to_email, connection, email, rules, stop_on)
+        matches = applied[:matches]
+        evaluated_count = applied[:evaluated_count]
+
+        if matches.any?
+          used_source     = 'custom'
+          selected_action = matches.first[:action]
+        elsif fallback_std && std[:matches].any?
+          used_source = 'standard'
+          matches     = std[:matches]
+        end
+      else
+        # source == 'standard'
+        matches     = std[:matches]
+        used_source = matches.any? ? 'standard' : 'none'
+      end
+
+      {
+        pattern_match: matches.any?,
+        rule_source:   used_source,
+        selected_action: selected_action,
+        top_match:     matches.first,
+        matches:       matches,
+        standard_signals: {
+          sender_flags:  std[:sender_flags],
+          subject_flags: std[:subject_flags],
+          body_flags:    std[:body_flags]
+        },
+        debug: {
+          evaluated_rules_count: evaluated_count,
+          schema_validated:      (source == 'custom'),
+          errors: []
+        }
+      }
     end
   },
   
@@ -1287,6 +1753,21 @@ require 'csv'
         ["Cost", "cost"],
         ["Accuracy", "accuracy"]
       ]
+    end,
+
+    devapi_regions: lambda do
+      [
+        ["US (www.workato.com)", "www"],
+        ["EU (app.eu.workato.com)", "app.eu"],
+        ["JP (app.jp.workato.com)", "app.jp"],
+        ["SG (app.sg.workato.com)", "app.sg"],
+        ["AU (app.au.workato.com)", "app.au"],
+        ["IL (app.il.workato.com)", "app.il"]
+      ]
+    end,
+
+    tables: lambda do |connection|
+      call(:pick_tables, connection)
     end
   }
 }
