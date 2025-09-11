@@ -839,54 +839,48 @@
     end,
     
     process_email_text: lambda do |input|
-      text = input["email_body"]
-      original_length = text.length
-      cleaned = text.dup
+      cleaned = (input['email_body'] || '').dup
+      original_length = cleaned.length
       removed_sections = []
       extracted_urls = []
-      
-      # Remove email signatures
-      if input["remove_signatures"]
-        signature_patterns = [
-          /^--\s*\n.*/m,
-          /^Best regards,.*/mi,
-          /^Sincerely,.*/mi,
-          /^Thanks,.*/mi,
-          /^Sent from my.*/mi
-        ]
-        
-        signature_patterns.each do |pattern|
-          if match = cleaned.match(pattern)
-            removed_sections << match[0]
-            cleaned.gsub!(pattern, "")
-          end
+
+      cleaned.gsub!("\r\n", "\n")
+
+      if input['remove_quotes']
+        removed_sections += cleaned.scan(/^\s*>.*$/)
+        cleaned.gsub!(/^\s*>.*$/ , '') # line mode, not /m
+      end
+
+      if input['remove_signatures']
+        lines = cleaned.lines
+        sig_idx = lines.rindex { |l| l =~ /^\s*(--\s*$|Best regards,|Regards,|Sincerely,|Thanks,|Sent from my)/i }
+        if sig_idx
+          removed_sections << lines[sig_idx..-1].join
+          cleaned = lines[0...sig_idx].join
         end
       end
-      
-      # Remove quoted text
-      if input["remove_quotes"]
-        quote_pattern = /^>+.*/
-        cleaned.gsub!(quote_pattern) do |match|
-          removed_sections << match
-          ""
+
+      if input['remove_disclaimers']
+        lines = cleaned.lines
+        disc_idx = lines.rindex { |l| l =~ /(This (e-)?mail|This message).*(confidential|intended only)/i }
+        if disc_idx && disc_idx >= lines.length - 25
+          removed_sections << lines[disc_idx..-1].join
+          cleaned = lines[0...disc_idx].join
         end
       end
-      
-      # Extract URLs if requested
-      if input["extract_urls"]
-        url_pattern = /https?:\/\/[^\s]+/
-        extracted_urls = cleaned.scan(url_pattern)
+
+      if input['extract_urls']
+        extracted_urls = cleaned.scan(%r{https?://[^\s<>"'()]+})
       end
-      
-      # Normalize whitespace
-      if input["normalize_whitespace"]
-        cleaned.gsub!(/\s+/, " ")
+
+      if input['normalize_whitespace']
+        cleaned.gsub!(/[ \t]+/, ' ')
+        cleaned.gsub!(/\n{3,}/, "\n\n")
         cleaned.strip!
       end
-      
-      # Extract main query (first paragraph after cleaning)
-      extracted_query = cleaned.split(/\n\n/)[0] || cleaned[0..200]
-      
+
+      extracted_query = cleaned.split(/\n{2,}/).find { |p| p.strip.length.positive? } || cleaned[0, 200].to_s
+
       {
         cleaned_text: cleaned,
         extracted_query: extracted_query,
@@ -894,7 +888,7 @@
         extracted_urls: extracted_urls,
         original_length: original_length,
         cleaned_length: cleaned.length,
-        reduction_percentage: ((1 - cleaned.length.to_f / original_length) * 100).round(2)
+        reduction_percentage: (original_length.zero? ? 0 : ((1 - cleaned.length.to_f / original_length) * 100)).round(2)
       }
     end,
     
