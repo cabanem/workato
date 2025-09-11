@@ -328,6 +328,232 @@
         message: e.message.to_s.gsub(/\s+/, " ")[0, 500],
         body: (e.respond_to?(:response) ? e.response&.body : nil)
       }
+    end,
+    # ---------- Developer API (tables/folders) ----------
+    devapi_create_table: lambda do |connection, input|
+      payload = {
+        name: input["name"],
+        folder_id: input["folder_id"],
+        schema: input["schema"]
+      }.compact
+      call(:execute_with_retry, connection) { post("/api/data_tables").payload(payload) }
+    end,
+
+    devapi_update_table: lambda do |connection, input|
+      body = {}
+      body[:name] = input["name"] if input["name"].present?
+      body[:folder_id] = input["folder_id"] if input["folder_id"].present?
+      body[:schema] = input["schema"] if input["schema"].present?
+      error("Provide at least one field to update") if body.empty?
+
+      path = "/api/data_tables/#{input['table_id']}"
+      call(:execute_with_retry, connection) { put(path).payload(body) }
+    end,
+    
+    devapi_truncate_table: lambda do |connection, table_id, confirm|
+      error("Truncation not confirmed") unless confirm == true
+      path = "/api/data_tables/#{table_id}/truncate"
+      call(:execute_with_retry, connection) { post(path) }
+      { success: true, truncated_at: Time.now.iso8601 }
+    end,
+
+    devapi_move_or_rename_table: lambda do |connection, input|
+      body = {}
+      body[:name] = input["name"] if input["name"].present?
+      body[:folder_id] = input["folder_id"] if input["folder_id"].present?
+      error("Provide at least one of name/folder_id") if body.empty?
+
+      path = "/api/data_tables/#{input['table_id']}"
+      call(:execute_with_retry, connection) { put(path).payload(body) }
+    end,
+
+    devapi_create_folder: lambda do |connection, input|
+      payload = { name: input["name"] }
+      payload[:parent_id] = input["parent_id"] if input["parent_id"].present?
+      resp = call(:execute_with_retry, connection) { post("/api/folders").payload(payload) }
+      resp.is_a?(Hash) ? resp : { "id" => resp }
+    end,
+
+    devapi_list_folders: lambda do |connection, input|
+      params = { page: input["page"], per_page: input["per_page"] }
+      params[:parent_id] = input["parent_id"] if input["parent_id"].present?
+      call(:list_index, connection, "/api/folders", params)
+    rescue RestClient::ExceptionWithResponse => e
+      hdrs = e.response&.headers || {}
+      cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
+      error("Failed to list folders (#{e.http_code}). cid=#{cid} body=#{e.response&.body}")
+    end,
+
+    devapi_list_projects: lambda do |connection, input|
+      params = { page: input["page"], per_page: input["per_page"] }
+      call(:list_index, connection, "/api/projects", params)
+    rescue RestClient::ExceptionWithResponse => e
+      hdrs = e.response&.headers || {}
+      cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
+      error("Failed to list projects (#{e.http_code}). cid=#{cid} body=#{e.response&.body}")
+    end,
+
+    # ---------- Data Tables v1 (records) ----------
+    dt_query: lambda do |connection, input|
+      call(:validate_table_id, input["table_id"])
+      where = call(:build_where, input["filters"])
+      order = if input["order"].present? && input["order"]["column"].present?
+        {
+          by: input["order"]["column"],
+          order: input["order"]["order"] || "asc",
+          case_sensitive: !!input["order"]["case_sensitive"]
+        }
+      end
+      body = {
+        select: input["select"],
+        where: where,
+        order: order,
+        limit: input["limit"] || 100,
+        continuation_token: input["continuation_token"],
+        timezone_offset_secs: input["timezone_offset_secs"]
+      }.compact
+      resp = call(:records_query_call, connection, input["table_id"], body)
+      call(:normalize_records_result, connection, resp)
+    end,
+
+    dt_query_next: lambda do |connection, input|
+      call(:validate_table_id, input["table_id"])
+      body = { continuation_token: input["continuation_token"], limit: input["limit"] }.compact
+      resp = call(:records_query_call, connection, input["table_id"], body)
+      call(:normalize_records_result, connection, resp)
+    end,
+
+    dt_create_record: lambda do |connection, input|
+      call(:validate_table_id, input["table_id"])
+      base = call(:records_base, connection)
+      url  = "#{base}/api/v1/tables/#{input['table_id']}/records"
+      result = call(:execute_with_retry, connection) { post(url).payload(input["data"]) }
+      rec = result.is_a?(Array) ? (result.first || {}) : result
+      { record_id: rec["record_id"], created_at: rec["created_at"], document: rec["document"] }
+    end,
+
+    dt_update_record: lambda do |connection, input|
+      call(:validate_table_id, input["table_id"])
+      base = call(:records_base, connection)
+      url  = "#{base}/api/v1/tables/#{input['table_id']}/records/#{input['record_id']}"
+      call(:execute_with_retry, connection) { put(url).payload(input["data"]) }
+    end,
+
+    dt_delete_record: lambda do |connection, input|
+      call(:validate_table_id, input["table_id"])
+      base = call(:records_base, connection)
+      url  = "#{base}/api/v1/tables/#{input['table_id']}/records/#{input['record_id']}"
+      resp = call(:execute_with_retry, connection) { delete(url) }
+      status = resp.is_a?(Hash) ? (resp.dig("data","status") || resp["status"]) : nil
+      { status: status || 200 }
+    end,
+
+    dt_batch_create_records: lambda do |connection, input|
+      call(:validate_table_id, input["table_id"])
+      base = call(:records_base, connection)
+      url  = "#{base}/api/v1/tables/#{input['table_id']}/records"
+      successes = []
+      errors = []
+      (input["records"] || []).each_with_index do |rec, idx|
+        begin
+          res = call(:execute_with_retry, connection) { post(url).payload(rec["data"]) }
+          successes << (res.is_a?(Array) ? (res.first || {}) : (res || {}))
+        rescue RestClient::ExceptionWithResponse => e
+          errors << call(:make_error_hash, idx, nil, e)
+        rescue => e
+          errors << call(:make_error_hash, idx, nil, e)
+        end
+      end
+      {
+        success_count: successes.length,
+        error_count: errors.length,
+        results: successes,
+        errors: errors
+      }
+    end,
+
+    dt_batch_update_records: lambda do |connection, input|
+      call(:validate_table_id, input["table_id"])
+      base = call(:records_base, connection)
+      successes = []
+      errors = []
+      (input["updates"] || []).each_with_index do |u, idx|
+        begin
+          url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{u['record_id']}"
+          res = call(:execute_with_retry, connection) { put(url).payload(u["data"]) }
+          successes << (res.is_a?(Array) ? (res.first || {}) : (res || {}))
+        rescue RestClient::ExceptionWithResponse => e
+          errors << call(:make_error_hash, idx, u["record_id"], e)
+        rescue => e
+          errors << call(:make_error_hash, idx, u["record_id"], e)
+        end
+      end
+      {
+        success_count: successes.length,
+        error_count: errors.length,
+        results: successes,
+        errors: errors
+      }
+    end,
+
+    dt_batch_delete_records: lambda do |connection, input|
+      call(:validate_table_id, input["table_id"])
+      base = call(:records_base, connection)
+      successes = []
+      errors = []
+      (input["record_ids"] || []).each_with_index do |rid, idx|
+        begin
+          url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{rid}"
+          resp = call(:execute_with_retry, connection) { delete(url) }
+          successes << { record_id: rid, status: resp.dig("data","status") || 200 }
+        rescue RestClient::ExceptionWithResponse => e
+          errors << call(:make_error_hash, idx, rid, e)
+        rescue => e
+          errors << call(:make_error_hash, idx, rid, e)
+        end
+      end
+      {
+        success_count: successes.length,
+        error_count: errors.length,
+        results: successes,
+        errors: errors
+      }
+    end,
+
+    # ----- Pick list helpers -----
+    pick_tables: lambda do |connection|
+      # Developer API: returns { "data": [ ... ] }
+      r = call(:execute_with_retry, connection) do
+        get("/api/data_tables").params(page: 1, per_page: 100)
+      end
+      arr = r.is_a?(Array) ? r : (r["data"] || [])
+      arr.map { |t| [t["name"] || t["id"].to_s, t["id"]] }
+    rescue RestClient::ExceptionWithResponse => e
+      error("Failed to load tables: #{e.response&.body || e.message}")
+    end,
+
+    pick_table_columns: lambda do |connection, table_id:|
+      return [] unless table_id.present?
+      table = call(:execute_with_retry, connection) do
+        get("/api/data_tables/#{table_id}")
+      end
+      cols = table["schema"] || table.dig("data", "schema") || []
+      cols.map { |col| [col["name"], col["name"]] }
+    rescue RestClient::NotFound
+      [] # Table disappeared or ID invalid; return empty so the UI doesn't explode
+    rescue RestClient::ExceptionWithResponse => e
+      error("Failed to load table columns: #{e.response&.body || e.message}")
+    end,
+
+    pick_folders: lambda do |connection|
+      # Use list_index for normalization + clamping + retry
+      r = call(:list_index, connection, "/api/folders", { page: 1, per_page: 200 })
+      (r["data"] || []).map { |f| [f["name"] || f["id"].to_s, f["id"]] }
+    end,
+
+    pick_projects: lambda do |connection|
+      r = call(:list_index, connection, "/api/projects", { page: 1, per_page: 200 })
+      (r["data"] || []).map { |p| [p["name"] || p["id"].to_s, p["id"]] }
     end
   },
   
@@ -335,30 +561,20 @@
   # PICKUP VALUES (Dynamic field values)
   # ==========================================
   pick_lists: {
-    tables: lambda do |_connection|
-      r = get("/api/data_tables").params(page: 1, per_page: 100)
-      (r["data"] || []).map { |t| [t["name"], t["id"]] }
+    tables: lambda do |connection|
+      call(:pick_tables, connection)
     end,
     
     table_columns: lambda do |connection, table_id:|
-      return [] unless table_id.present?
-      
-      table = call(:execute_with_retry, connection) { get("/api/data_tables/#{table_id}") }
-      cols = table["schema"] || table.dig("data", "schema") || []
-      cols.map { |col| [col["name"], col["name"]] }
+      call(:pick_table_columns, connection, table_id: table_id)
     end,
 
-    folders: lambda do |_connection|
-      r = get("/api/folders").params(page: 1, per_page: 200)
-      arr = r.is_a?(Array) ? r : (r["data"] || [])
-      arr.map { |f| [f["name"] || f["id"].to_s, f["id"]] }
+    folders: lambda do |connection|
+      call(:pick_folders, connection)
     end,
 
-
-    projects: lambda do |_connection|
-      r = get("/api/projects").params(page: 1, per_page: 200)
-      arr = r.is_a?(Array) ? r : (r["data"] || [])
-      arr.map { |p| [p["name"] || p["id"].to_s, p["id"]] }
+    projects: lambda do |connection|
+      call(:pick_projects, connection)
     end
   },
 
@@ -477,7 +693,6 @@
   # - GET /api/data_tables → envelope { "data": [...] }
   actions: {
     # ---------- TABLES (Developer API) ----------
-    # Create Table
     create_table: {
       title: "Create data table",
       input_fields: lambda do
@@ -523,17 +738,14 @@
         ]
       end,
       output_fields: lambda do |object_definitions|
-        { name: "data", type: "object", properties: object_definitions["table"] }
+        [
+          { name: "data", type: "object", properties: object_definitions["table"] }
+        ]
       end,
-      execute: lambda do |_connection, input|
-        post("/api/data_tables").payload(
-          name: input["name"],
-          folder_id: input["folder_id"],
-          schema: input["schema"]
-        )
+      execute: lambda do |connection, input|
+        call(:devapi_create_table, connection, input)
       end
     },
-    # Update table
     update_table: {
       title: "Update data table",
       input_fields: lambda do
@@ -553,17 +765,14 @@
         ]
       end,
       output_fields: lambda do |object_definitions|
-        { name: "data", type: "object", properties: object_definitions["table"] }
+        [
+          { name: "data", type: "object", properties: object_definitions["table"] }
+        ]
       end,
-      execute: lambda do |_connection, input|
-        body = {}
-        body[:name] = input["name"] if input["name"].present?
-        body[:folder_id] = input["folder_id"] if input["folder_id"].present?
-        body[:schema] = input["schema"] if input["schema"].present?
-        put("/api/data_tables/#{input['table_id']}").payload(body)
+      execute: lambda do |connection, input|
+        call(:devapi_update_table, connection, input)
       end
-    },
-    # Truncate table (keep schema, clear rows) 
+    }, 
     truncate_table: {
       title: "Truncate data table",
       subtitle: "Remove all records, keep schema",
@@ -580,15 +789,10 @@
           { name: "truncated_at", type: "timestamp" }
         ]
       end,
-      execute: lambda do |_connection, input|
-        error("Truncation not confirmed") unless input["confirm"] == true
-        post("/api/data_tables/#{input['table_id']}/truncate")
-        { success: true, truncated_at: Time.now.iso8601 }
-      rescue RestClient::ExceptionWithResponse => e
-        error("Failed to truncate: #{e.response&.body || e.message}")
+      execute: lambda do |connection, input|
+        call(:devapi_truncate_table, connection, input["table_id"], input["confirm"])
       end
     },
-    # Move table to folder/rename table 
     move_or_rename_table: {
       title: "Move/rename data table",
       subtitle: "Change folder and/or name",
@@ -600,17 +804,12 @@
         ]
       end,
       output_fields: lambda do |object_definitions|
-        { name: "data", type: "object", properties: object_definitions["table"] }
+        [
+          { name: "data", type: "object", properties: object_definitions["table"] }
+        ]
       end,
-      execute: lambda do |_connection, input|
-        body = {}
-        body[:name] = input["name"] if input["name"].present?
-        body[:folder_id] = input["folder_id"] if input["folder_id"].present?
-        error("Provide at least one of name/folder_id") if body.empty?
-
-        put("/api/data_tables/#{input['table_id']}").payload(body)
-      rescue RestClient::ExceptionWithResponse => e
-        error("Failed to move/rename: #{e.response&.body || e.message}")
+      execute: lambda do |connection, input|
+        call(:devapi_move_or_rename_table, connection, input)
       end
     },
 
@@ -631,13 +830,7 @@
         ]
       end,
       execute: lambda do |connection, input|
-        params = { page: input["page"], per_page: input["per_page"] }
-        params[:parent_id] = input["parent_id"] if input["parent_id"].present?
-        call(:list_index, connection, "/api/folders", params)
-      rescue RestClient::ExceptionWithResponse => e
-        hdrs = e.response&.headers || {}
-        cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
-        error("Failed to list folders (#{e.http_code}). cid=#{cid} body=#{e.response&.body}")
+        call(:devapi_list_folders, connection, input)
       end
     },
     list_projects: {
@@ -654,12 +847,7 @@
         ]
       end,
       execute: lambda do |connection, input|
-        params = { page: input["page"], per_page: input["per_page"] }
-        call(:list_index, connection, "/api/projects", params)
-      rescue RestClient::ExceptionWithResponse => e
-        hdrs = e.response&.headers || {}
-        cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
-        error("Failed to list projects (#{e.http_code}). cid=#{cid} body=#{e.response&.body}")
+        call(:devapi_list_projects, connection, input)
       end
     },
     create_folder: {
@@ -671,18 +859,13 @@
           # Removed project id input field, POST /api/folder does not have project_id param in payload
         ]
       end,
-      output_fields: lambda do |object_definitions|
-        { name: "data", type: "object", properties: object_definitions["folder"] }
+      output_fields: lambda do |_object_definitions|
+        [
+          { name: "id" }
+        ]
       end,
-      execute: lambda do |_connection, input|
-        payload = { name: input["name"] }
-        payload[:parent_id] = input["parent_id"] if input["parent_id"].present?
-
-        resp = post("/api/folders").payload(payload)
-        data = resp.is_a?(Hash) ? resp : { "id" => resp }
-        { "data" => data }
-      rescue RestClient::ExceptionWithResponse => e
-        error("Failed to create folder: #{e.response&.body || e.message}")
+      execute: lambda do |connection, input|
+        call(:devapi_create_folder, connection, input)
       end
     },
 
@@ -724,28 +907,7 @@
         object_definitions["records_result"]
       end,
       execute: lambda do |connection, input|
-        call(:validate_table_id, input["table_id"])
-
-        where = call(:build_where, input["filters"])
-        order = if input["order"].present? && input["order"]["column"].present?
-                  { by: input["order"]["column"],
-                    order: input["order"]["order"] || "asc",
-                    case_sensitive: !!input["order"]["case_sensitive"] }
-                end
-
-        body = {
-          select: input["select"],
-          where: where,
-          order: order,
-          limit: input["limit"] || 100,
-          continuation_token: input["continuation_token"],
-          timezone_offset_secs: input["timezone_offset_secs"]
-        }.compact
-
-        resp = call(:records_query_call, connection, input["table_id"], body)
-        call(:normalize_records_result, connection, resp)
-      rescue RestClient::ExceptionWithResponse => e
-        error("Query failed: #{e.response&.body || e.message}")
+        call(:dt_query, connection, input)
       end
 
     },
@@ -766,19 +928,7 @@
         ]
       end,
       execute: lambda do |connection, input|
-        # Validate table ID, fail fast if invalid
-        call(:validate_table_id, input["table_id"])
-
-        base = call(:records_base, connection)
-        url = "#{base}/api/v1/tables/#{input['table_id']}/records"
-        result = call(:execute_with_retry, connection) { post(url).payload(input["data"]) }
-        # Spec shows array reply sometimes; normalize to first element/hash
-        rec = result.is_a?(Array) ? (result.first || {}) : result
-        {
-          record_id: rec["record_id"],
-          created_at: rec["created_at"],
-          document: rec["document"]
-        }
+        call(:dt_create_record, connection, input)
       end
     },
     update_record: {
@@ -796,12 +946,7 @@
         ]
       end,
       execute: lambda do |connection, input|
-        # Validate table ID, fail fast if invalid
-        call(:validate_table_id, input["table_id"])
-
-        base = call(:records_base, connection)
-        url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{input['record_id']}"
-        call(:execute_with_retry, connection) { put(url).payload(input["data"]) }
+        call(:dt_update_record, connection, input)
       end
     },
     delete_record: {
@@ -818,20 +963,7 @@
         ]
       end,
       execute: lambda do |connection, input|
-        # Validate table ID, fail fast if invalid
-        call(:validate_table_id, input["table_id"])
-
-        base = call(:records_base, connection)
-        url  = "#{base}/api/v1/tables/#{input['table_id']}/records/#{input['record_id']}"
-        resp = call(:execute_with_retry, connection) { delete(url) }
-
-        status = if resp.is_a?(Hash)
-                  resp.dig("data", "status") || resp["status"]
-                else
-                  nil
-                end
-
-        { status: status || 200 }
+        call(:dt_delete_record, connection, input)
       end
     },
     # -- Batch --
@@ -851,33 +983,7 @@
         object_definitions["batch_result"]
       end,
       execute: lambda do |connection, input|
-        # Validate table ID, fail fast if invalid
-        call(:validate_table_id, input["table_id"])
-
-        base = call(:records_base, connection)
-        url = "#{base}/api/v1/tables/#{input['table_id']}/records"
-
-        successes = []
-        errors = []
-
-        (input["records"] || []).each_with_index do |rec, idx|
-          begin
-            res = call(:execute_with_retry, connection) { post(url).payload(rec["data"]) }
-            successes << (res.is_a?(Array) ? (res.first || {}) : (res || {}))
-
-          rescue RestClient::ExceptionWithResponse => e
-            errors << call(:make_error_hash, idx, nil, e)
-          rescue => e
-            errors << call(:make_error_hash, idx, nil, e)
-          end
-        end
-
-        {
-          success_count: successes.length,
-          error_count: errors.length,
-          results: successes,
-          errors: errors
-        }
+        call(:dt_batch_create_records, connection, input)
       end
     },
     batch_update_records: {
@@ -896,32 +1002,7 @@
         object_definitions["batch_result"]
       end,
       execute: lambda do |connection, input|
-        # Validate table ID, fail fast if invalid
-        call(:validate_table_id, input["table_id"])
-
-        base = call(:records_base, connection)
-
-        successes = []
-        errors = []
-
-        (input["updates"] || []).each_with_index do |u, idx|
-          begin
-            url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{u['record_id']}"
-            res = call(:execute_with_retry, connection) { put(url).payload(u["data"]) }
-            successes << (res.is_a?(Array) ? (res.first || {}) : (res || {}))
-          rescue RestClient::ExceptionWithResponse => e
-            errors << call(:make_error_hash, idx, u["record_id"], e)
-          rescue => e
-            errors << call(:make_error_hash, idx, u["record_id"], e)
-          end
-        end
-
-        {
-          success_count: successes.length,
-          error_count: errors.length,
-          results: successes,
-          errors: errors
-        }
+        call(:dt_batch_update_records, connection, input)
       end
     },
     batch_delete_records: {
@@ -937,33 +1018,7 @@
         object_definitions["batch_result"]
       end,
       execute: lambda do |connection, input|
-        # Validate table ID, fail fast if invalid
-        call(:validate_table_id, input["table_id"])
-
-        base = call(:records_base, connection)
-
-        successes = []
-        errors = []
-
-        (input["record_ids"] || []).each_with_index do |rid, idx|
-          begin
-            url = "#{base}/api/v1/tables/#{input['table_id']}/records/#{rid}"
-            resp = call(:execute_with_retry, connection) { delete(url) }
-            successes << { record_id: rid, status: resp.dig("data","status") || 200 }
-
-          rescue RestClient::ExceptionWithResponse => e
-            errors << call(:make_error_hash, idx, rid, e)
-          rescue => e
-            errors << call(:make_error_hash, idx, rid, e)
-          end
-        end
-
-        {
-          success_count: successes.length,
-          error_count: errors.length,
-          results: successes,
-          errors: errors
-        }
+        call(:dt_batch_delete_records, connection, input)
       end
     },
     query_records_paged: {
@@ -1002,28 +1057,7 @@
         object_definitions["records_result"]
       end,
       execute: lambda do |connection, input|
-        # Validate table ID, fail fast if invalid
-        call(:validate_table_id, input["table_id"])
-
-        where = call(:build_where, input["filters"])
-        order = if input["order"].present? && input["order"]["column"].present?
-          { by: input["order"]["column"],
-            order: input["order"]["order"] || "asc",
-            case_sensitive: !!input["order"]["case_sensitive"] }
-        end
-
-        body = {
-          select: input["select"],
-          where: where,
-          order: order,
-          limit: input["limit"] || 100,
-          timezone_offset_secs: input["timezone_offset_secs"]
-        }.compact
-
-        resp = call(:records_query_call, connection, input["table_id"], body)
-        call(:normalize_records_result, connection, resp)
-      rescue RestClient::ExceptionWithResponse => e
-        error("Query failed: #{e.response&.body || e.message}")
+        call(:dt_query, connection, input)
       end
     },
     query_records_next_page: {
@@ -1040,18 +1074,7 @@
         object_definitions["records_result"]
       end,
       execute: lambda do |connection, input|
-        # Validate table ID, fail fast if invalid
-        call(:validate_table_id, input["table_id"])
-
-        body = {
-          continuation_token: input["continuation_token"],
-          limit: input["limit"]
-        }.compact
-
-        resp = call(:records_query_call, connection, input["table_id"], body)
-        call(:normalize_records_result, connection, resp)
-      rescue RestClient::ExceptionWithResponse => e
-        error("Next page failed: #{e.response&.body || e.message}")
+        call(:dt_query_next, connection, input)
       end
     }
     # -- File Column --
