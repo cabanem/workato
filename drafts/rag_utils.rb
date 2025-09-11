@@ -164,8 +164,10 @@ require 'csv'
 
       input_fields: lambda do |object_definitions|
         [
-          { name: "email_body", label: "Email Body", type: "string",
-            optional: false, control_type: "text-area" }
+          { 
+            name: "email_body", label: "Email Body", type: "string", optional: false, 
+            control_type: "text-area", hint: "Raw email body text to be cleaned"
+          }
         ] + object_definitions["email_cleaning_options"]
       end,
 
@@ -210,9 +212,12 @@ require 'csv'
           },
           {
             name: "normalize", label: "Normalize Vectors", type: "boolean",
-            default: true, optional: true,
-            hint: "Normalize vectors before comparison",
+            default: true, optional: true, hint: "Normalize vectors before comparison",
             ngIf: 'config.similarity_method != "dot_product"'
+          },
+          { 
+            name: "similarity_type", type: "string", control_type: "text",
+            optional: true, default: config["similarity_method"], render_input: "hidden"
           }
         ]
       end,
@@ -307,18 +312,18 @@ require 'csv'
       input_fields: lambda do |object_definitions, _connection, config|
         fields = [
           { name: "query", label: "User Query", type: "string",
-            optional: false, control_type: "text-area" },
+            optional: false, control_type: "text-area", group: "Query" },
           {
             name: "context_documents", label: "Context Documents",
             type: "array", of: "object",
             properties: object_definitions["context_document"],
-            list_mode_toggle: true, optional: false
+            list_mode_toggle: true, optional: false, group: "Context"
           }
         ]
         if config["prompt_mode"] == "template"
           fields << {
             name: "prompt_template", label: "Prompt Template",
-            type: "string", default: "standard",
+            type: "string", default: "standard", group: "Template Settings",
             control_type: "select", pick_list: "prompt_templates", optional: true,
             toggle_hint: "Select",
             toggle_field: {
@@ -330,21 +335,24 @@ require 'csv'
           fields << {
             name: "system_instructions", label: "System Instructions",
             type: "string", control_type: "text-area", optional: true,
-            hint: "Custom system instructions for the prompt"
+            hint: "Custom system instructions for the prompt", group: "Custom Settings"
           }
         end
 
-        fields << {
-          name: "advanced_settings", label: "Advanced Settings", type: "object", optional: true,
-          properties: [
-            { name: "max_context_length", label: "Max Context Length",
-              type: "integer", default: 3000, convert_input: "integer_conversion",
-              hint: "Maximum tokens for context" },
-            { name: "include_metadata", label: "Include Metadata",
-              type: "boolean", default: false, convert_input: "boolean_conversion",
-              hint: "Include document metadata in prompt" }
-          ]
-        }
+        fields +=[
+          {
+            name: "advanced_settings", label: "Advanced Settings", type: "object", optional: true,
+            group: "Advanced", hint: "Optional advanced configuration",
+            properties: [
+              { name: "max_context_length", label: "Max Context Length",
+                type: "integer", default: 3000, convert_input: "integer_conversion",
+                hint: "Maximum tokens for context" },
+              { name: "include_metadata", label: "Include Metadata",
+                type: "boolean", default: false, convert_input: "boolean_conversion",
+                hint: "Include document metadata in prompt" }
+            ]
+          }
+        ]
         fields
       end,
 
@@ -1859,7 +1867,54 @@ require 'csv'
     },
 
     similarity_result: {
-
+      fields: lambda do
+        [
+          { 
+            name: "similarity_score", 
+            type: "number", 
+            label: "Similarity Score",
+            hint: "Raw similarity score (0-1 for cosine/euclidean, unbounded for dot product)"
+          },
+          { 
+            name: "similarity_percentage", 
+            type: "number", 
+            label: "Similarity Percentage",
+            hint: "Percentage representation of similarity (0-100), only for cosine/euclidean"
+          },
+          { 
+            name: "is_similar", 
+            type: "boolean",
+            label: "Is Similar",
+            hint: "Whether the vectors meet the similarity threshold"
+          },
+          { 
+            name: "similarity_type", 
+            type: "string",
+            label: "Similarity Type",
+            hint: "Method used for calculation (cosine, euclidean, or dot_product)"
+          },
+          { 
+            name: "computation_time_ms", 
+            type: "integer",
+            label: "Computation Time (ms)",
+            hint: "Time taken to compute similarity in milliseconds"
+          },
+          {
+            name: "threshold_used",
+            type: "number",
+            label: "Threshold Used",
+            hint: "Similarity threshold applied for is_similar determination",
+            optional: true
+          },
+          {
+            name: "vectors_normalized",
+            type: "boolean",
+            label: "Vectors Normalized",
+            hint: "Whether vectors were normalized before calculation",
+            optional: true
+          }
+        ]
+      end
     }
   },
   
