@@ -585,8 +585,7 @@ require 'csv'
             control_type: "select",
             pick_list: "tables",
             hint: "Required when rules_source = custom",
-            toggle_field: "rules_source",
-            toggle_state: "custom"
+            ngIf: "input.rules_source == 'custom'"
           },
           { name: "stop_on_first_match", type: "boolean", default: true, optional: true,
             hint: "When true, returns as soon as a rule matches" },
