@@ -1,3 +1,8 @@
+require 'digest'
+require 'time'
+require 'json'
+require 'csv'
+
 {
   title: "RAG Utilities",
   description: "Custom utility functions for RAG email response system",
@@ -46,7 +51,7 @@
       type: "custom_auth",
       
       apply: lambda do |connection|
-        headers("X-Environment": connection["environment"])
+        headers('X-Environment' => connection['environment'])
       end
     }
   },
@@ -74,51 +79,17 @@
       title: "Smart Chunk Text",
       subtitle: "Intelligently chunk text preserving context",
       description: "Splits text into chunks with smart boundaries and overlap",
-      
+
       input_fields: lambda do
         [
-          {
-            name: "text",
-            label: "Input Text",
-            type: "string",
-            optional: false,
-            control_type: "text-area"
-          },
-          {
-            name: "chunk_size",
-            label: "Chunk Size (tokens)",
-            type: "integer",
-            optional: true,
-            default: 1000,
-            hint: "Maximum tokens per chunk"
-          },
-          {
-            name: "chunk_overlap",
-            label: "Chunk Overlap (tokens)",
-            type: "integer",
-            optional: true,
-            default: 100,
-            hint: "Token overlap between chunks"
-          },
-          {
-            name: "preserve_sentences",
-            label: "Preserve Sentences",
-            type: "boolean",
-            optional: true,
-            default: true,
-            hint: "Don't break mid-sentence"
-          },
-          {
-            name: "preserve_paragraphs",
-            label: "Preserve Paragraphs",
-            type: "boolean",
-            optional: true,
-            default: false,
-            hint: "Try to keep paragraphs intact"
-          }
+          { name: "text", label: "Input Text", type: "string", optional: false, control_type: "text-area" },
+          { name: "chunk_size", label: "Chunk Size (tokens)", type: "integer", optional: true, default: 1000, hint: "Maximum tokens per chunk" },
+          { name: "chunk_overlap", label: "Chunk Overlap (tokens)", type: "integer", optional: true, default: 100, hint: "Token overlap between chunks" },
+          { name: "preserve_sentences", label: "Preserve Sentences", type: "boolean", optional: true, default: true, hint: "Don't break mid-sentence" },
+          { name: "preserve_paragraphs", label: "Preserve Paragraphs", type: "boolean", optional: true, default: false, hint: "Try to keep paragraphs intact" }
         ]
       end,
-      
+
       output_fields: lambda do
         [
           {
@@ -135,18 +106,14 @@
               { name: "metadata", type: "object" }
             ]
           },
-          {
-            name: "total_chunks",
-            type: "integer"
-          },
-          {
-            name: "total_tokens",
-            type: "integer"
-          }
+          { name: "total_chunks", type: "integer" },
+          { name: "total_tokens", type: "integer" }
         ]
       end,
-      
+
       execute: lambda do |connection, input|
+        input['chunk_size']   ||= (connection['chunk_size_default'] || 1000).to_i
+        input['chunk_overlap'] ||= (connection['chunk_overlap_default'] || 100).to_i
         call(:chunk_text_with_overlap, input)
       end
     },
@@ -158,54 +125,18 @@
       title: "Clean Email Text",
       subtitle: "Preprocess email content for RAG",
       description: "Removes signatures, quotes, and normalizes email text",
-      
+
       input_fields: lambda do
         [
-          {
-            name: "email_body",
-            label: "Email Body",
-            type: "string",
-            optional: false,
-            control_type: "text-area"
-          },
-          {
-            name: "remove_signatures",
-            label: "Remove Signatures",
-            type: "boolean",
-            optional: true,
-            default: true
-          },
-          {
-            name: "remove_quotes",
-            label: "Remove Quoted Text",
-            type: "boolean",
-            optional: true,
-            default: true
-          },
-          {
-            name: "remove_disclaimers",
-            label: "Remove Disclaimers",
-            type: "boolean",
-            optional: true,
-            default: true
-          },
-          {
-            name: "normalize_whitespace",
-            label: "Normalize Whitespace",
-            type: "boolean",
-            optional: true,
-            default: true
-          },
-          {
-            name: "extract_urls",
-            label: "Extract URLs",
-            type: "boolean",
-            optional: true,
-            default: false
-          }
+          { name: "email_body", label: "Email Body", type: "string", optional: false, control_type: "text-area" },
+          { name: "remove_signatures", label: "Remove Signatures", type: "boolean", optional: true, default: true },
+          { name: "remove_quotes", label: "Remove Quoted Text", type: "boolean", optional: true, default: true },
+          { name: "remove_disclaimers", label: "Remove Disclaimers", type: "boolean", optional: true, default: true },
+          { name: "normalize_whitespace", label: "Normalize Whitespace", type: "boolean", optional: true, default: true },
+          { name: "extract_urls", label: "Extract URLs", type: "boolean", optional: true, default: false }
         ]
       end,
-      
+
       output_fields: lambda do
         [
           { name: "cleaned_text", type: "string" },
@@ -217,8 +148,8 @@
           { name: "reduction_percentage", type: "number" }
         ]
       end,
-      
-      execute: lambda do |connection, input|
+
+      execute: lambda do |_connection, input|
         call(:process_email_text, input)
       end
     },
@@ -228,46 +159,18 @@
     # ------------------------------------------
     calculate_similarity: {
       title: "Calculate Vector Similarity",
-      subtitle: "Calculate cosine similarity between vectors",
+      subtitle: "Compute similarity scores for vectors",
       description: "Computes similarity scores for vector embeddings",
-      
+
       input_fields: lambda do
         [
-          {
-            name: "vector_a",
-            label: "Vector A",
-            type: "array",
-            of: "number",
-            optional: false,
-            hint: "First embedding vector"
-          },
-          {
-            name: "vector_b",
-            label: "Vector B",
-            type: "array",
-            of: "number",
-            optional: false,
-            hint: "Second embedding vector"
-          },
-          {
-            name: "similarity_type",
-            label: "Similarity Type",
-            type: "string",
-            optional: true,
-            default: "cosine",
-            control_type: "select",
-            pick_list: "similarity_types"
-          },
-          {
-            name: "normalize",
-            label: "Normalize Vectors",
-            type: "boolean",
-            optional: true,
-            default: true
-          }
+          { name: "vector_a", label: "Vector A", type: "array", of: "number", optional: false, hint: "First embedding vector" },
+          { name: "vector_b", label: "Vector B", type: "array", of: "number", optional: false, hint: "Second embedding vector" },
+          { name: "similarity_type", label: "Similarity Type", type: "string", optional: true, default: "cosine", control_type: "select", pick_list: "similarity_types" },
+          { name: "normalize", label: "Normalize Vectors", type: "boolean", optional: true, default: true }
         ]
       end,
-      
+
       output_fields: lambda do
         [
           { name: "similarity_score", type: "number" },
@@ -277,7 +180,7 @@
           { name: "computation_time_ms", type: "integer" }
         ]
       end,
-      
+
       execute: lambda do |connection, input|
         call(:compute_similarity, input, connection)
       end
@@ -290,7 +193,7 @@
       title: "Format Embeddings for Vertex AI",
       subtitle: "Format embeddings for batch processing",
       description: "Prepares embedding data for Vertex AI Vector Search",
-      
+
       input_fields: lambda do
         [
           {
@@ -305,32 +208,12 @@
             ],
             optional: false
           },
-          {
-            name: "index_endpoint",
-            label: "Index Endpoint ID",
-            type: "string",
-            optional: false
-          },
-          {
-            name: "batch_size",
-            label: "Batch Size",
-            type: "integer",
-            optional: true,
-            default: 25,
-            hint: "Embeddings per batch"
-          },
-          {
-            name: "format_type",
-            label: "Format Type",
-            type: "string",
-            optional: true,
-            default: "json",
-            control_type: "select",
-            pick_list: "format_types"
-          }
+          { name: "index_endpoint", label: "Index Endpoint ID", type: "string", optional: false },
+          { name: "batch_size", label: "Batch Size", type: "integer", optional: true, default: 25, hint: "Embeddings per batch" },
+          { name: "format_type", label: "Format Type", type: "string", optional: true, default: "json", control_type: "select", pick_list: "format_types" }
         ]
       end,
-      
+
       output_fields: lambda do
         [
           {
@@ -340,19 +223,28 @@
             properties: [
               { name: "batch_id", type: "string" },
               { name: "batch_number", type: "integer" },
-              { name: "datapoints", type: "array" },
+              {
+                name: "datapoints",
+                type: "array",
+                of: "object",
+                properties: [
+                  { name: "datapoint_id", type: "string" },
+                  { name: "feature_vector", type: "array", of: "number" },
+                  { name: "restricts", type: "object" }
+                ]
+              },
               { name: "size", type: "integer" }
             ]
           },
           { name: "total_batches", type: "integer" },
           { name: "total_embeddings", type: "integer" },
           { name: "index_endpoint", type: "string" },
-          { name: 'format', type: 'string' },
-          { name: 'payload', type: 'string' } # JSON/JSONL/CSV string per format_type
+          { name: "format", type: "string" },
+          { name: "payload", type: "string" } # JSON/JSONL/CSV string per format_type
         ]
       end,
-      
-      execute: lambda do |connection, input|
+
+      execute: lambda do |_connection, input|
         call(:format_for_vertex_ai, input)
       end
     },
@@ -364,16 +256,10 @@
       title: "Build RAG Prompt",
       subtitle: "Construct optimized RAG prompt",
       description: "Creates a prompt with context and query for LLM",
-      
+
       input_fields: lambda do
         [
-          {
-            name: "query",
-            label: "User Query",
-            type: "string",
-            optional: false,
-            control_type: "text-area"
-          },
+          { name: "query", label: "User Query", type: "string", optional: false, control_type: "text-area" },
           {
             name: "context_documents",
             label: "Context Documents",
@@ -387,38 +273,13 @@
             ],
             optional: false
           },
-          {
-            name: "prompt_template",
-            label: "Prompt Template",
-            type: "string",
-            optional: true,
-            control_type: "select",
-            pick_list: "prompt_templates"
-          },
-          {
-            name: "max_context_length",
-            label: "Max Context Length",
-            type: "integer",
-            optional: true,
-            default: 3000
-          },
-          {
-            name: "include_metadata",
-            label: "Include Metadata",
-            type: "boolean",
-            optional: true,
-            default: false
-          },
-          {
-            name: "system_instructions",
-            label: "System Instructions",
-            type: "string",
-            optional: true,
-            control_type: "text-area"
-          }
+          { name: "prompt_template", label: "Prompt Template", type: "string", optional: true, control_type: "select", pick_list: "prompt_templates" },
+          { name: "max_context_length", label: "Max Context Length", type: "integer", optional: true, default: 3000 },
+          { name: "include_metadata", label: "Include Metadata", type: "boolean", optional: true, default: false },
+          { name: "system_instructions", label: "System Instructions", type: "string", optional: true, control_type: "text-area" }
         ]
       end,
-      
+
       output_fields: lambda do
         [
           { name: "formatted_prompt", type: "string" },
@@ -428,8 +289,8 @@
           { name: "prompt_metadata", type: "object" }
         ]
       end,
-      
-      execute: lambda do |connection, input|
+
+      execute: lambda do |_connection, input|
         call(:construct_rag_prompt, input)
       end
     },
@@ -441,29 +302,12 @@
       title: "Validate LLM Response",
       subtitle: "Validate and score LLM output",
       description: "Checks response quality and relevance",
-      
+
       input_fields: lambda do
         [
-          {
-            name: "response_text",
-            label: "LLM Response",
-            type: "string",
-            optional: false,
-            control_type: "text-area"
-          },
-          {
-            name: "original_query",
-            label: "Original Query",
-            type: "string",
-            optional: false
-          },
-          {
-            name: "context_provided",
-            label: "Context Documents",
-            type: "array",
-            of: "string",
-            optional: true
-          },
+          { name: "response_text", label: "LLM Response", type: "string", optional: false, control_type: "text-area" },
+          { name: "original_query", label: "Original Query", type: "string", optional: false },
+          { name: "context_provided", label: "Context Documents", type: "array", of: "string", optional: true },
           {
             name: "validation_rules",
             label: "Validation Rules",
@@ -475,16 +319,10 @@
             ],
             optional: true
           },
-          {
-            name: "min_confidence",
-            label: "Minimum Confidence",
-            type: "number",
-            optional: true,
-            default: 0.7
-          }
+          { name: "min_confidence", label: "Minimum Confidence", type: "number", optional: true, default: 0.7 }
         ]
       end,
-      
+
       output_fields: lambda do
         [
           { name: "is_valid", type: "boolean" },
@@ -495,12 +333,12 @@
           { name: "suggested_improvements", type: "array", of: "string" }
         ]
       end,
-      
-      execute: lambda do |connection, input|
-        call(:validate_response, input, connection)
+
+      execute: lambda do |_connection, input|
+        call(:validate_response, input)
       end
     },
-    
+
     # ------------------------------------------
     # 7. GENERATE DOCUMENT METADATA
     # ------------------------------------------
@@ -508,47 +346,17 @@
       title: "Generate Document Metadata",
       subtitle: "Extract metadata from documents",
       description: "Generates comprehensive metadata for document indexing",
-      
+
       input_fields: lambda do
         [
-          {
-            name: "document_content",
-            label: "Document Content",
-            type: "string",
-            optional: false,
-            control_type: "text-area"
-          },
-          {
-            name: "file_path",
-            label: "File Path",
-            type: "string",
-            optional: false
-          },
-          {
-            name: "file_type",
-            label: "File Type",
-            type: "string",
-            optional: true,
-            control_type: "select",
-            pick_list: "file_types"
-          },
-          {
-            name: "extract_entities",
-            label: "Extract Entities",
-            type: "boolean",
-            optional: true,
-            default: true
-          },
-          {
-            name: "generate_summary",
-            label: "Generate Summary",
-            type: "boolean",
-            optional: true,
-            default: true
-          }
+          { name: "document_content", label: "Document Content", type: "string", optional: false, control_type: "text-area" },
+          { name: "file_path", label: "File Path", type: "string", optional: false },
+          { name: "file_type", label: "File Type", type: "string", optional: true, control_type: "select", pick_list: "file_types" },
+          { name: "extract_entities", label: "Extract Entities", type: "boolean", optional: true, default: true },
+          { name: "generate_summary", label: "Generate Summary", type: "boolean", optional: true, default: true }
         ]
       end,
-      
+
       output_fields: lambda do
         [
           { name: "document_id", type: "string" },
@@ -564,12 +372,12 @@
           { name: "processing_time_ms", type: "integer" }
         ]
       end,
-      
-      execute: lambda do |connection, input|
+
+      execute: lambda do |_connection, input|
         call(:extract_metadata, input)
       end
     },
-    
+
     # ------------------------------------------
     # 8. CHECK DOCUMENT CHANGES
     # ------------------------------------------
@@ -577,47 +385,17 @@
       title: "Check Document Changes",
       subtitle: "Detect changes in documents",
       description: "Compares document versions to detect modifications",
-      
+
       input_fields: lambda do
         [
-          {
-            name: "current_hash",
-            label: "Current Document Hash",
-            type: "string",
-            optional: false
-          },
-          {
-            name: "current_content",
-            label: "Current Content",
-            type: "string",
-            optional: true,
-            control_type: "text-area"
-          },
-          {
-            name: "previous_hash",
-            label: "Previous Document Hash",
-            type: "string",
-            optional: false
-          },
-          {
-            name: "previous_content",
-            label: "Previous Content",
-            type: "string",
-            optional: true,
-            control_type: "text-area"
-          },
-          {
-            name: "check_type",
-            label: "Check Type",
-            type: "string",
-            optional: true,
-            default: "hash",
-            control_type: "select",
-            pick_list: "check_types"
-          }
+          { name: "current_hash", label: "Current Document Hash", type: "string", optional: false },
+          { name: "current_content", label: "Current Content", type: "string", optional: true, control_type: "text-area" },
+          { name: "previous_hash", label: "Previous Document Hash", type: "string", optional: false },
+          { name: "previous_content", label: "Previous Content", type: "string", optional: true, control_type: "text-area" },
+          { name: "check_type", label: "Check Type", type: "string", optional: true, default: "hash", control_type: "select", pick_list: "check_types" }
         ]
       end,
-      
+
       output_fields: lambda do
         [
           { name: "has_changed", type: "boolean" },
@@ -629,12 +407,12 @@
           { name: "requires_reindexing", type: "boolean" }
         ]
       end,
-      
-      execute: lambda do |connection, input|
+
+      execute: lambda do |_connection, input|
         call(:detect_changes, input)
       end
     },
-    
+
     # ------------------------------------------
     # 9. CALCULATE METRICS
     # ------------------------------------------
@@ -642,17 +420,10 @@
       title: "Calculate Performance Metrics",
       subtitle: "Calculate system performance metrics",
       description: "Computes various performance and efficiency metrics",
-      
+
       input_fields: lambda do
         [
-          {
-            name: "metric_type",
-            label: "Metric Type",
-            type: "string",
-            optional: false,
-            control_type: "select",
-            pick_list: "metric_types"
-          },
+          { name: "metric_type", label: "Metric Type", type: "string", optional: false, control_type: "select", pick_list: "metric_types" },
           {
             name: "data_points",
             label: "Data Points",
@@ -665,25 +436,11 @@
             ],
             optional: false
           },
-          {
-            name: "aggregation_period",
-            label: "Aggregation Period",
-            type: "string",
-            optional: true,
-            default: "hour",
-            control_type: "select",
-            pick_list: "time_periods"
-          },
-          {
-            name: "include_percentiles",
-            label: "Include Percentiles",
-            type: "boolean",
-            optional: true,
-            default: true
-          }
+          { name: "aggregation_period", label: "Aggregation Period", type: "string", optional: true, default: "hour", control_type: "select", pick_list: "time_periods" },
+          { name: "include_percentiles", label: "Include Percentiles", type: "boolean", optional: true, default: true }
         ]
       end,
-      
+
       output_fields: lambda do
         [
           { name: "average", type: "number" },
@@ -698,12 +455,12 @@
           { name: "anomalies_detected", type: "array", of: "object" }
         ]
       end,
-      
-      execute: lambda do |connection, input|
+
+      execute: lambda do |_connection, input|
         call(:compute_metrics, input)
       end
     },
-    
+
     # ------------------------------------------
     # 10. OPTIMIZE BATCH SIZE
     # ------------------------------------------
@@ -711,15 +468,10 @@
       title: "Optimize Batch Size",
       subtitle: "Calculate optimal batch size for processing",
       description: "Determines optimal batch size based on performance data",
-      
+
       input_fields: lambda do
         [
-          {
-            name: "total_items",
-            label: "Total Items to Process",
-            type: "integer",
-            optional: false
-          },
+          { name: "total_items", label: "Total Items to Process", type: "integer", optional: false },
           {
             name: "processing_history",
             label: "Processing History",
@@ -733,32 +485,12 @@
             ],
             optional: true
           },
-          {
-            name: "optimization_target",
-            label: "Optimization Target",
-            type: "string",
-            optional: true,
-            default: "throughput",
-            control_type: "select",
-            pick_list: "optimization_targets"
-          },
-          {
-            name: "max_batch_size",
-            label: "Maximum Batch Size",
-            type: "integer",
-            optional: true,
-            default: 100
-          },
-          {
-            name: "min_batch_size",
-            label: "Minimum Batch Size",
-            type: "integer",
-            optional: true,
-            default: 10
-          }
+          { name: "optimization_target", label: "Optimization Target", type: "string", optional: true, default: "throughput", control_type: "select", pick_list: "optimization_targets" },
+          { name: "max_batch_size", label: "Maximum Batch Size", type: "integer", optional: true, default: 100 },
+          { name: "min_batch_size", label: "Minimum Batch Size", type: "integer", optional: true, default: 10 }
         ]
       end,
-      
+
       output_fields: lambda do
         [
           { name: "optimal_batch_size", type: "integer" },
@@ -769,8 +501,8 @@
           { name: "recommendation_reason", type: "string" }
         ]
       end,
-      
-      execute: lambda do |connection, input|
+
+      execute: lambda do |_connection, input|
         call(:calculate_optimal_batch, input)
       end
     }
@@ -816,9 +548,7 @@
         end
 
         # guarantee forward progress
-        if chunk_end <= position
-          chunk_end = [position + [chars_per_chunk, 1].max, text_len].min
-        end
+        chunk_end = [position + [chars_per_chunk, 1].max, text_len].min if chunk_end <= position
 
         chunk_text = text[position...chunk_end]
         token_count = (chunk_text.length / 4.0).ceil
@@ -922,7 +652,6 @@
       type      = (input['similarity_type'] || 'cosine').to_s
       threshold = (connection['similarity_threshold'] || 0.7).to_f
 
-      # normalization strategy
       if normalize
         norm = ->(v) { mag = Math.sqrt(v.sum { |x| x * x }); mag.zero? ? v : v.map { |x| x / mag } }
         a = norm.call(a)
@@ -938,9 +667,8 @@
                 (mag_a > 0 && mag_b > 0) ? dot / (mag_a * mag_b) : 0.0
               when 'euclidean'
                 dist = Math.sqrt(a.zip(b).sum { |x, y| (x - y)**2 })
-                1.0 / (1.0 + dist) # map distance to (0,1]
+                1.0 / (1.0 + dist)
               when 'dot_product'
-                # if not normalized, the scale is embedding-dependent; strongly prefer normalized
                 dot
               else
                 (mag_a > 0 && mag_b > 0) ? dot / (mag_a * mag_b) : 0.0
@@ -954,7 +682,6 @@
                   if normalize
                     score >= threshold
                   else
-                    # nudges users to supply meaningful threshold when not normalized
                     raise 'For dot_product without normalization, provide an absolute threshold appropriate to your embedding scale.'
                   end
                 end
@@ -969,9 +696,6 @@
     end,
 
     format_for_vertex_ai: lambda do |input|
-      require 'json'
-      require 'csv'
-
       embeddings = input['embeddings'] || []
       batch_size = (input['batch_size'] || 25).to_i
       format     = (input['format_type'] || 'json').to_s
@@ -993,7 +717,6 @@
         batches << formatted_batch
       end
 
-      # flattened datapoints for serialization
       all_datapoints = batches.flat_map { |b| b[:datapoints] }
 
       payload = case format
@@ -1005,7 +728,7 @@
                     rows << [dp[:datapoint_id], JSON.generate(dp[:feature_vector]), JSON.generate(dp[:restricts])]
                   end
                   CSV.generate { |c| rows.each { |r| c << r } }
-                else # 'json'
+                else
                   JSON.generate(all_datapoints)
                 end
 
@@ -1015,13 +738,11 @@
         total_embeddings: embeddings.length,
         index_endpoint: input['index_endpoint'],
         format: format,
-        payload: payload # expose serialized data (add to action output_fields)
+        payload: payload
       }
     end,
 
     construct_rag_prompt: lambda do |input|
-      require 'json'
-
       query = input['query'].to_s
       context_docs = Array(input['context_documents'] || [])
       template = (input['prompt_template'] || 'standard').to_s
@@ -1049,17 +770,17 @@
       context_text = context_parts.join("\n\n---\n\n")
 
       prompt = case template
-              when 'standard'
-                "Context:\n#{context_text}\n\nQuery: #{query}\n\nAnswer:"
-              when 'customer_service'
-                "You are a customer service assistant. Use the following context to answer the customer's question.\n\nContext:\n#{context_text}\n\nCustomer Question: #{query}\n\nResponse:"
-              when 'technical'
-                "You are a technical support specialist. Use the provided context to solve the technical issue.\n\nContext:\n#{context_text}\n\nTechnical Issue: #{query}\n\nSolution:"
-              when 'sales'
-                "You are a sales representative. Use the context to address the sales inquiry.\n\nContext:\n#{context_text}\n\nSales Inquiry: #{query}\n\nResponse:"
-              else
-                "#{system_instructions}\n\nContext:\n#{context_text}\n\nQuery: #{query}\n\nAnswer:"
-              end
+               when 'standard'
+                 "Context:\n#{context_text}\n\nQuery: #{query}\n\nAnswer:"
+               when 'customer_service'
+                 "You are a customer service assistant. Use the following context to answer the customer's question.\n\nContext:\n#{context_text}\n\nCustomer Question: #{query}\n\nResponse:"
+               when 'technical'
+                 "You are a technical support specialist. Use the provided context to solve the technical issue.\n\nContext:\n#{context_text}\n\nTechnical Issue: #{query}\n\nSolution:"
+               when 'sales'
+                 "You are a sales representative. Use the context to address the sales inquiry.\n\nContext:\n#{context_text}\n\nSales Inquiry: #{query}\n\nResponse:"
+               else
+                 "#{system_instructions}\n\nContext:\n#{context_text}\n\nQuery: #{query}\n\nAnswer:"
+               end
 
       {
         formatted_prompt: prompt,
@@ -1116,7 +837,6 @@
         end
       end
 
-      # clamp
       confidence = [[confidence, 0.0].max, 1.0].min
 
       {
@@ -1130,9 +850,6 @@
     end,
 
     extract_metadata: lambda do |input|
-      require 'digest'
-      require 'time'
-
       content = input['document_content'].to_s
       file_path = input['file_path'].to_s
       extract_entities = input.key?('extract_entities') ? !!input['extract_entities'] : true
@@ -1180,6 +897,29 @@
       previous_content = input['previous_content']
       check_type       = (input['check_type'] || 'hash').to_s
 
+      # SMART mode: compute token-level change and structured diff regardless of hash equality
+      if check_type == 'smart' && current_content && previous_content
+        diff = call(:util_diff_lines, current_content.to_s, previous_content.to_s)
+
+        tokens_cur  = current_content.to_s.split(/\s+/)
+        tokens_prev = previous_content.to_s.split(/\s+/)
+        union = (tokens_cur | tokens_prev).length
+        intersection = (tokens_cur & tokens_prev).length
+        smart_change = union.zero? ? 0.0 : ((1.0 - intersection.to_f / union) * 100).round(2)
+
+        changed = smart_change > 0.0 || diff[:added].any? || diff[:removed].any? || diff[:modified_sections].any?
+
+        return {
+          has_changed: changed,
+          change_type: changed ? 'smart_changed' : 'none',
+          change_percentage: smart_change,
+          added_content: diff[:added],
+          removed_content: diff[:removed],
+          modified_sections: diff[:modified_sections],
+          requires_reindexing: changed
+        }
+      end
+
       has_changed = current_hash != previous_hash
       change_type = 'none'
       change_percentage = 0.0
@@ -1191,84 +931,11 @@
         change_type = 'hash_changed'
 
         if check_type == 'content' && current_content && previous_content
-          cur = current_content.to_s.split("\n")
-          prev = previous_content.to_s.split("\n")
-          i = 0
-          j = 0
-          window = 20
-
-          while i < cur.length && j < prev.length
-            if cur[i] == prev[j]
-              i += 1
-              j += 1
-              next
-            end
-
-            # try to resync within a small window
-            idx_in_cur = ((i + 1)..[i + window, cur.length - 1].min).find { |k| cur[k] == prev[j] }
-            idx_in_prev = ((j + 1)..[j + window, prev.length - 1].min).find { |k| prev[k] == cur[i] }
-
-            if idx_in_cur
-              # lines added in current
-              block = cur[i...idx_in_cur]
-              added.concat(block)
-              modified_sections << {
-                type: 'added',
-                current_range: [i, idx_in_cur - 1],
-                previous_range: [j - 1, j - 1],
-                current_lines: block
-              }
-              i = idx_in_cur
-            elsif idx_in_prev
-              # lines removed from previous
-              block = prev[j...idx_in_prev]
-              removed.concat(block)
-              modified_sections << {
-                type: 'removed',
-                current_range: [i - 1, i - 1],
-                previous_range: [j, idx_in_prev - 1],
-                previous_lines: block
-              }
-              j = idx_in_prev
-            else
-              # treat as modified pair
-              modified_sections << {
-                type: 'modified',
-                current_range: [i, i],
-                previous_range: [j, j],
-                current_lines: [cur[i]],
-                previous_lines: [prev[j]]
-              }
-              added << cur[i]
-              removed << prev[j]
-              i += 1
-              j += 1
-            end
-          end
-
-          # tails
-          if i < cur.length
-            block = cur[i..-1]
-            added.concat(block)
-            modified_sections << {
-              type: 'added',
-              current_range: [i, cur.length - 1],
-              previous_range: [j - 1, j - 1],
-              current_lines: block
-            }
-          elsif j < prev.length
-            block = prev[j..-1]
-            removed.concat(block)
-            modified_sections << {
-              type: 'removed',
-              current_range: [i - 1, i - 1],
-              previous_range: [j, prev.length - 1],
-              previous_lines: block
-            }
-          end
-
-          total_lines = [cur.length, prev.length].max
-          change_percentage = total_lines.zero? ? 0.0 : (((added.length + removed.length).to_f / total_lines) * 100).round(2)
+          diff = call(:util_diff_lines, current_content.to_s, previous_content.to_s)
+          added = diff[:added]
+          removed = diff[:removed]
+          modified_sections = diff[:modified_sections]
+          change_percentage = diff[:line_change_percentage]
           change_type = 'content_changed'
         end
       end
@@ -1284,33 +951,224 @@
       }
     end,
 
+    compute_metrics: lambda do |input|
+      data_points = Array(input['data_points'] || [])
+      values = data_points.map { |dp| dp['value'].to_f }.sort
+
+      return {
+        average: 0, median: 0, min: 0, max: 0,
+        std_deviation: 0, percentile_95: 0, percentile_99: 0,
+        total_count: 0, trend: 'stable', anomalies_detected: []
+      } if values.empty?
+
+      avg = values.sum / values.length.to_f
+      median = values.length.odd? ? values[values.length / 2] :
+               (values[values.length / 2 - 1] + values[values.length / 2]) / 2.0
+      min_v = values.first
+      max_v = values.last
+
+      variance = values.map { |v| (v - avg)**2 }.sum / values.length
+      std_dev = Math.sqrt(variance)
+
+      pct = lambda do |arr, p|
+        return 0 if arr.empty?
+        r = (p/100.0) * (arr.length - 1)
+        lo = r.floor
+        hi = r.ceil
+        lo == hi ? arr[lo] : arr[lo] + (r - lo) * (arr[hi] - arr[lo])
+      end
+      p95 = pct.call(values, 95)
+      p99 = pct.call(values, 99)
+
+      half = values.length / 2
+      first_half_avg = half.zero? ? avg : values[0...half].sum / half.to_f
+      second_half_avg = (values.length - half).zero? ? avg : values[half..-1].sum / (values.length - half).to_f
+      trend =
+        if second_half_avg > first_half_avg * 1.1 then 'increasing'
+        elsif second_half_avg < first_half_avg * 0.9 then 'decreasing'
+        else 'stable'
+        end
+
+      anomalies = data_points.select { |dp| (dp['value'].to_f - avg).abs > 2 * std_dev }
+                             .map { |dp| { timestamp: dp['timestamp'], value: dp['value'] } }
+
+      {
+        average: avg.round(2),
+        median: median.round(2),
+        min: min_v,
+        max: max_v,
+        std_deviation: std_dev.round(2),
+        percentile_95: p95.round(2),
+        percentile_99: p99.round(2),
+        total_count: values.length,
+        trend: trend,
+        anomalies_detected: anomalies
+      }
+    end,
+
+    calculate_optimal_batch: lambda do |input|
+      total_items = (input['total_items'] || 0).to_i
+      history = Array(input['processing_history'] || [])
+      target = (input['optimization_target'] || 'throughput').to_s
+      max_batch = (input['max_batch_size'] || 100).to_i
+      min_batch = (input['min_batch_size'] || 10).to_i
+
+      if history.empty?
+        optimal = [[(total_items / 10.0).ceil, max_batch].min, min_batch].max
+        return {
+          optimal_batch_size: optimal,
+          estimated_batches: (optimal.zero? ? 0 : (total_items.to_f / optimal).ceil),
+          estimated_processing_time: 0.0,
+          throughput_estimate: 0.0,
+          confidence_score: 0.5,
+          recommendation_reason: 'No history available, using default calculation'
+        }
+      end
+
+      optimal =
+        case target
+        when 'throughput'
+          best = history.max_by { |h| h['batch_size'].to_f / [h['processing_time'].to_f, 0.0001].max }
+          best['batch_size'].to_i
+        when 'latency'
+          best = history.min_by { |h| h['processing_time'].to_f / [h['batch_size'].to_f, 1].max }
+          best['batch_size'].to_i
+        when 'cost'
+          best = history.min_by { |h| (h['memory_usage'].to_f * 0.7) - (h['batch_size'].to_f / [h['processing_time'].to_f, 0.0001].max) * 0.3 }
+          best['batch_size'].to_i
+        when 'accuracy'
+          best = history.max_by { |h| (h['success_rate'].to_f * 1000) + (h['batch_size'].to_f / [h['processing_time'].to_f, 0.0001].max) }
+          best['batch_size'].to_i
+        else
+          (history.sum { |h| h['batch_size'].to_i } / [history.length, 1].max)
+        end
+
+      optimal = [[optimal, max_batch].min, min_batch].max
+      estimated_batches = (optimal.zero? ? 0 : (total_items.to_f / optimal).ceil)
+      avg_time = history.sum { |h| h['processing_time'].to_f } / [history.length, 1].max
+      estimated_time = avg_time * estimated_batches
+      throughput = estimated_time.zero? ? 0.0 : (total_items.to_f / estimated_time)
+
+      {
+        optimal_batch_size: optimal,
+        estimated_batches: estimated_batches,
+        estimated_processing_time: estimated_time.round(2),
+        throughput_estimate: throughput.round(2),
+        confidence_score: 0.8,
+        recommendation_reason: 'Based on historical performance data'
+      }
+    end,
+
     # ---------- Helpers ----------
 
     util_last_boundary_end: lambda do |segment, regex|
-      # returns the end index (within segment) of the last match, or nil
       matches = segment.to_enum(:scan, regex).map { Regexp.last_match }
       return nil if matches.empty?
       matches.last.end(0)
     end,
 
     util_coerce_numeric_vector: lambda do |arr|
-      v = Array(arr).map do |x|
+      Array(arr).map do |x|
         begin
           Float(x)
         rescue
           raise 'Vectors must contain only numerics.'
         end
       end
-      v
-    end
+    end,
 
+    util_diff_lines: lambda do |current_content, previous_content|
+      cur = current_content.to_s.split("\n")
+      prev = previous_content.to_s.split("\n")
+      i = 0
+      j = 0
+      window = 20
+      added = []
+      removed = []
+      modified_sections = []
+
+      while i < cur.length && j < prev.length
+        if cur[i] == prev[j]
+          i += 1
+          j += 1
+          next
+        end
+
+        idx_in_cur = ((i + 1)..[i + window, cur.length - 1].min).find { |k| cur[k] == prev[j] }
+        idx_in_prev = ((j + 1)..[j + window, prev.length - 1].min).find { |k| prev[k] == cur[i] }
+
+        if idx_in_cur
+          block = cur[i...idx_in_cur]
+          added.concat(block)
+          modified_sections << {
+            type: 'added',
+            current_range: [i, idx_in_cur - 1],
+            previous_range: [j - 1, j - 1],
+            current_lines: block
+          }
+          i = idx_in_cur
+        elsif idx_in_prev
+          block = prev[j...idx_in_prev]
+          removed.concat(block)
+          modified_sections << {
+            type: 'removed',
+            current_range: [i - 1, i - 1],
+            previous_range: [j, idx_in_prev - 1],
+            previous_lines: block
+          }
+          j = idx_in_prev
+        else
+          modified_sections << {
+            type: 'modified',
+            current_range: [i, i],
+            previous_range: [j, j],
+            current_lines: [cur[i]],
+            previous_lines: [prev[j]]
+          }
+          added << cur[i]
+          removed << prev[j]
+          i += 1
+          j += 1
+        end
+      end
+
+      if i < cur.length
+        block = cur[i..-1]
+        added.concat(block)
+        modified_sections << {
+          type: 'added',
+          current_range: [i, cur.length - 1],
+          previous_range: [j - 1, j - 1],
+          current_lines: block
+        }
+      elsif j < prev.length
+        block = prev[j..-1]
+        removed.concat(block)
+        modified_sections << {
+          type: 'removed',
+          current_range: [i - 1, i - 1],
+          previous_range: [j, prev.length - 1],
+          previous_lines: block
+        }
+      end
+
+      total_lines = [cur.length, prev.length].max
+      line_change_percentage = total_lines.zero? ? 0.0 : (((added.length + removed.length).to_f / total_lines) * 100).round(2)
+
+      {
+        added: added,
+        removed: removed,
+        modified_sections: modified_sections,
+        line_change_percentage: line_change_percentage
+      }
+    end
   },
   
   # ==========================================
   # OBJECT DEFINITIONS (Schemas)
   # ==========================================
   object_definitions: {
-    
+
     chunk_object: {
       fields: lambda do
         [
@@ -1324,7 +1182,7 @@
         ]
       end
     },
-    
+
     embedding_object: {
       fields: lambda do
         [
@@ -1334,7 +1192,7 @@
         ]
       end
     },
-    
+
     metric_datapoint: {
       fields: lambda do
         [
@@ -1350,7 +1208,7 @@
   # PICK LISTS (Dropdown Options)
   # ==========================================
   pick_lists: {
-    
+
     environments: lambda do
       [
         ["Development", "dev"],
@@ -1358,7 +1216,7 @@
         ["Production", "prod"]
       ]
     end,
-    
+
     similarity_types: lambda do
       [
         ["Cosine Similarity", "cosine"],
@@ -1366,7 +1224,7 @@
         ["Dot Product", "dot_product"]
       ]
     end,
-    
+
     format_types: lambda do
       [
         ["JSON", "json"],
@@ -1374,7 +1232,7 @@
         ["CSV", "csv"]
       ]
     end,
-    
+
     prompt_templates: lambda do
       [
         ["Standard RAG", "standard"],
@@ -1384,7 +1242,7 @@
         ["Custom", "custom"]
       ]
     end,
-    
+
     file_types: lambda do
       [
         ["PDF", "pdf"],
@@ -1394,7 +1252,7 @@
         ["HTML", "html"]
       ]
     end,
-    
+
     check_types: lambda do
       [
         ["Hash Only", "hash"],
@@ -1402,7 +1260,7 @@
         ["Smart Diff", "smart"]
       ]
     end,
-    
+
     metric_types: lambda do
       [
         ["Response Time", "response_time"],
@@ -1412,7 +1270,7 @@
         ["Throughput", "throughput"]
       ]
     end,
-    
+
     time_periods: lambda do
       [
         ["Minute", "minute"],
@@ -1421,7 +1279,7 @@
         ["Week", "week"]
       ]
     end,
-    
+
     optimization_targets: lambda do
       [
         ["Throughput", "throughput"],
