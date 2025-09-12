@@ -370,8 +370,6 @@ If you extend this documentation or add in‑product help strings, follow the Go
 * Consider a “vector dimension check” in **Calculate vector similarity** and **Format embeddings** to catch model mismatches early.
 * If you need local development, use the SDK Gem and CLI (RSpec + VCR).([Workato Docs][22])
 
-This is the pragmatic core: wire the connection, pick the right action for the job, and keep your regions and table schemas straight. The rest is just honest plumbing.
-
 [1]: https://developers.google.com/style/highlights "Highlights | Google developer documentation style guide"
 [2]: https://docs.workato.com/developing-connectors/sdk.html "Connector SDK"
 [3]: https://docs.workato.com/data-tables.html "Data tables"
