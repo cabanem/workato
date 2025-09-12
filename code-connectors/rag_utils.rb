@@ -2338,6 +2338,19 @@ require 'csv'
       else
         call(:pick_tables, connection)
       end
+    end,
+
+    table_columns: lambda do |connection, config|
+      if connection['api_token'].blank?
+        [[ "Please configure API token in connector connection", nil ]]
+      else
+        tbl = (config['custom_rules_table_id'] || '').to_s
+        if tbl.blank?
+          [[ "Select a Data Table above first", nil ]]
+        else
+          call(:dt_table_columns, connection, tbl)
+        end
+      end
     end
   }
 }
