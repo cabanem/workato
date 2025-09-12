@@ -5,7 +5,7 @@
 # Workato Connector Template
 
 ## Quick Start
-1. Run `./setup.sh`
+1. Run `chmod +x ./setup.sh`, then `./setup.sh`
 2. Test: `make test`
 3. Console: `make console`
 
