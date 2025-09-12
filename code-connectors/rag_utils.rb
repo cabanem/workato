@@ -112,7 +112,7 @@ require 'csv'
       result[:region]    = connection['developer_api_host']
       # Data tables are optional; verify reachability if permitted
       begin
-        _tables = call(:execute_with_retry, connection, lambda { get('/api/data_tables', page: 1, per_page: 1) })
+        _tables = call(:execute_with_retry, connection, lambda { get('/api/data_tables').params(page: 1, per_page: 1) })
         result[:data_tables] = "reachable"
       rescue RestClient::ExceptionWithResponse => e
         # Token may not have this privilege; surface gently
@@ -1652,7 +1652,7 @@ require 'csv'
 
     pick_tables: lambda do |connection|
       # Use relative path against base_uri; pass params hash per docs
-      resp = call(:execute_with_retry, connection, lambda { get('/api/data_tables', page: 1, per_page: 100) })
+      resp = call(:execute_with_retry, connection, lambda { get('/api/data_tables').params(page: 1, per_page: 100) })
       arr = resp.is_a?(Array) ? resp : (resp['data'] || [])
       arr.map { |t| [t['name'] || t['id'].to_s, t['id']] }
     rescue RestClient::ExceptionWithResponse => e
@@ -2258,25 +2258,25 @@ require 'csv'
       ]
     end,
 
-    prompt_templates: lambda do |connection,
-      template_source: 'builtin',
-      templates_table_id: nil,
-      template_display_field: 'name',
-      template_value_field: nil,
-      template_content_field: 'content'|
+    prompt_templates: lambda do |connection, config = {}|
+      cfg = config || {}
+      template_source        = (cfg['template_source'] || cfg[:template_source] || 'builtin').to_s
+      templates_table_id     = cfg['templates_table_id'] || cfg[:templates_table_id]
+      template_display_field = (cfg['template_display_field'] || cfg[:template_display_field] || 'name').to_s
+      template_value_field   = (cfg['template_value_field'] || cfg[:template_value_field]).to_s
+      template_content_field = (cfg['template_content_field'] || cfg[:template_content_field] || 'content').to_s
 
-      if template_source.to_s == 'custom'
+      if template_source == 'custom'
         if connection['api_token'].blank? || templates_table_id.to_s.strip.empty?
-          return [[ "Configure API token and Templates table in action config", nil ]]
+          [[ "Configure API token and Templates table in action config", nil ]]
+        else
+          call(:pick_templates_from_table, connection, {
+            'templates_table_id'      => templates_table_id,
+            'template_display_field'  => template_display_field,
+            'template_value_field'    => template_value_field,
+            'template_content_field'  => template_content_field
+          })
         end
-
-        cfg = {
-          'templates_table_id'      => templates_table_id,
-          'template_display_field'  => template_display_field,
-          'template_value_field'    => (template_value_field || '').to_s,
-          'template_content_field'  => template_content_field
-        }
-        call(:pick_templates_from_table, connection, cfg)
       else
         [
           ["Standard RAG",      "standard"],
@@ -2342,17 +2342,19 @@ require 'csv'
       end
     end,
 
-    table_columns: lambda do |connection, config|
-      if connection['api_token'].blank?
-        [[ "Please configure API token in connector connection", nil ]]
+  table_columns: lambda do |connection, config = {}|
+    cfg = config || {}
+    if connection['api_token'].blank?
+      [[ "Please configure API token in connector connection", nil ]]
+    else
+      tbl = (cfg.is_a?(Hash) ? (cfg['custom_rules_table_id'] || cfg[:custom_rules_table_id]) : nil).to_s
+      if tbl.empty?
+        [[ "Select a Data Table above first", nil ]]
       else
-        tbl = (config['custom_rules_table_id'] || '').to_s
-        if tbl.blank?
-          [[ "Select a Data Table above first", nil ]]
-        else
-          call(:dt_table_columns, connection, tbl)
-        end
+        call(:dt_table_columns, connection, tbl)
       end
     end
+  end
+
   }
 }
