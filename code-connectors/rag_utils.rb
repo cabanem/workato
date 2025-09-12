@@ -830,18 +830,47 @@ require 'csv'
         }
       end,
 
-      config_fields: [
+      config_fields: [ # Remember -- config drives inputs
         {
           name: "rules_source", label: "Rules source", control_type: "select",
           pick_list: [["Standard", "standard"], ["Custom (Data Tables)", "custom"]],
-          default: "standard", sticky: true, hint: "Use 'Custom' to evaluate against a data table of rules."
+          default: "standard", sticky: true, support_pills: false,
+          hint: "Use 'Custom' to evaluate against a data table of rules."
         },
         {
           name: "custom_rules_table_id", label: "Rules table (Data Tables)",
-          control_type: "select", pick_list: "tables",
-          ngIf: 'config.rules_source == "custom"',
+          control_type: "select", pick_list: "tables", support_pills: false,
+          ngIf: 'input.rules_source == "custom"', sticky: true,
           hint: "Required when rules_source is custom"
-        }
+        },
+        # Optional column mapping when teams use different column names
+        {
+          name: "enable_column_mapping",
+          label: "Custom column names?",
+          type: "boolean", control_type: "checkbox", default: false,
+          ngIf: 'input.rules_source == "custom"',
+          sticky: true, support_pills: false
+        },
+        # Mapped columns – only shown when mapping is enabled
+        { name: "col_rule_id",      label: "Rule ID column",      control_type: "select", pick_list: "table_columns",
+          ngIf: 'input.rules_source == "custom" && input.enable_column_mapping == true',
+          optional: true, sticky: true, support_pills: false },
+        { name: "col_rule_type",    label: "Rule type column",    control_type: "select", pick_list: "table_columns",
+          ngIf: 'input.rules_source == "custom" && input.enable_column_mapping == true',
+          optional: true, sticky: true, support_pills: false },
+        { name: "col_rule_pattern", label: "Rule pattern column", control_type: "select", pick_list: "table_columns",
+          ngIf: 'input.rules_source == "custom" && input.enable_column_mapping == true',
+          optional: true, sticky: true, support_pills: false },
+        { name: "col_action",       label: "Action column",       control_type: "select", pick_list: "table_columns",
+          ngIf: 'input.rules_source == "custom" && input.enable_column_mapping == true',
+          optional: true, sticky: true, support_pills: false },
+        { name: "col_priority",     label: "Priority column",     control_type: "select", pick_list: "table_columns",
+          ngIf: 'input.rules_source == "custom" && input.enable_column_mapping == true',
+          optional: true, sticky: true, support_pills: false },
+        { name: "col_active",       label: "Active column",       control_type: "select", pick_list: "table_columns",
+          ngIf: 'input.rules_source == "custom" && input.enable_column_mapping == true',
+          optional: true, sticky: true, support_pills: false }
+
       ],
 
       input_fields: lambda do |object_definitions, _connection, config|
@@ -867,11 +896,17 @@ require 'csv'
           }
         ]
 
+        # Show selected table id as read-only context when relevant
         if (config["rules_source"] || "standard").to_s == "custom"
           fields << {
-            name: "selected_rules_table_id", label: "Selected rules table",
+            name: "selected_rules_table_id",
+            label: "Selected rules table",
             type: "string", optional: true, sticky: true,
-            hint: "From configuration above.", default: config["custom_rules_table_id"], group: "Advanced"
+            hint: "From configuration above.",
+            default: config["custom_rules_table_id"],
+            control_type: "plain-text", # documented read-only
+            support_pills: false,
+            group: "Advanced"
           }
         end
 
@@ -1605,6 +1640,14 @@ require 'csv'
       error("Table ID must be a UUID") unless table_id.to_s.match?(uuid)
     end,
 
+    # Return [ [name, name], ... ] for picklists
+    dt_table_columns: lambda do |connection, table_id|
+      table = call(:devapi_get_table, connection, table_id)
+      schema = table['schema'] || table.dig('data', 'schema') || []
+      cols = Array(schema).map { |c| n = (c['name'] || '').to_s; [n, n] }.reject { |a| a[0].empty? }
+      cols.presence || [[ "No columns found", nil ]]
+    end,
+
     pick_tables: lambda do |connection|
       # Use relative path against base_uri; pass params hash per docs
       resp = call(:execute_with_retry, connection, lambda { get('/api/data_tables', page: 1, per_page: 100) })
@@ -1622,17 +1665,19 @@ require 'csv'
       call(:execute_with_retry, connection, lambda { get("/api/data_tables/#{table_id}") })
     end,
 
-    validate_rules_schema!: lambda do |_connection, schema, required_names|
+    validate_rules_schema!: lambda do |_connection, schema, required_names, mapping = {}|
       names = Array(schema).map { |c| (c['name'] || '').to_s }
-      missing = required_names.reject { |n| names.include?(n) }
+      expected = required_names.map { |n| (mapping[n] || n).to_s }
+      missing = expected.reject { |n| names.include?(n) }
       error("Rules table missing required fields: #{missing.join(', ')}") unless missing.empty?
     end,
 
     schema_field_id_map: lambda do |_connection, schema|
-      Hash[ Array(schema).map { |c| [ (c['name'] || '').to_s, (c['field_id'] || c['id'] || '').to_s ] } ]
+      Hash[Array(schema).map { |c| [(c['name'] || '').to_s, (c['field_id'] || c['id'] || '').to_s] }]
     end,
 
-    dt_query_rules_all: lambda do |connection, table_id, required_fields, max_rules, schema = nil|
+    # Pull and normalize rules with optional column mapping
+    dt_query_rules_all: lambda do |connection, table_id, required_fields, max_rules, schema = nil, mapping = {}|
       base = call(:dt_records_base, connection)
       url  = "#{base}/api/v1/tables/#{table_id}/query"
 
@@ -1640,23 +1685,30 @@ require 'csv'
         table = call(:devapi_get_table, connection, table_id)
         table['schema'] || table.dig('data', 'schema') || []
       end
+
       name_to_uuid = call(:schema_field_id_map, connection, schema)
 
-      select_fields = required_fields + ['$record_id', '$created_at', '$updated_at']
-      where         = { "active" => { "$eq" => true } }
-      order         = { by: "priority", order: "asc", case_sensitive: false }
+      # Apply mapping (or defaults) consistently
+      col = ->(key) { (mapping[key] || key).to_s }
+      select_fields = required_fields.map { |k| col.call(k) } + ['$record_id', '$created_at', '$updated_at']
+      active_col = col.call('active')
+      prio_col   = col.call('priority')
+
+      where = { active_col => { '$eq' => true } }
+      order = { by: prio_col, order: 'asc', case_sensitive: false }
 
       records = []
       cont = nil
       loop do
-        body  = { select: select_fields, where: where, order: order, limit: 200, continuation_token: cont }.compact
-        resp  = call(:execute_with_retry, connection, lambda { post(url).payload(body) })
-        recs  = resp['records'] || resp['data'] || []
+        body = { select: select_fields.uniq, where: where, order: order, limit: 200, continuation_token: cont }.compact
+        resp = call(:execute_with_retry, connection, lambda { post(url).payload(body) })
+        recs = resp['records'] || resp['data'] || []
         records.concat(recs)
         cont = resp['continuation_token']
         break if cont.blank? || records.length >= max_rules
       end
 
+      # Decode each record to a name->value row using schema
       decoded = records.map do |r|
         doc = r['document'] || []
         row = {}
@@ -1671,20 +1723,23 @@ require 'csv'
         row
       end
 
-      decoded.map do |row|
+      # Normalize to connector’s canonical keys, respecting mapping
+      normalized = decoded.map do |row|
         {
-          'rule_id'      => (row['rule_id'] || '').to_s,
-          'rule_type'    => (row['rule_type'] || '').to_s.downcase,
-          'rule_pattern' => (row['rule_pattern'] || '').to_s,
-          'action'       => (row['action'] || '').to_s,
-          'priority'     => call(:coerce_int, connection, row['priority'], 1000),
-          'active'       => call(:coerce_bool, connection, row['active']),
+          'rule_id'      => (row[col.call('rule_id')]      || '').to_s,
+          'rule_type'    => (row[col.call('rule_type')]    || '').to_s.downcase,
+          'rule_pattern' => (row[col.call('rule_pattern')] || '').to_s,
+          'action'       => (row[col.call('action')]       || '').to_s,
+          'priority'     => call(:coerce_int, connection, row[col.call('priority')], 1000),
+          'active'       => call(:coerce_bool, connection, row[col.call('active')]),
           'created_at'   => row['$created_at']
         }
       end
-      .select { |r| r['active'] == true }
-      .sort_by { |r| r['priority'] }
-      .first(max_rules)
+
+      normalized
+        .select { |r| r['active'] == true }
+        .sort_by { |r| r['priority'] }
+        .first(max_rules)
     end,
 
     coerce_bool: lambda do |_connection, v|
@@ -1794,6 +1849,7 @@ require 'csv'
       { matches: out.sort_by { |h| [h[:priority] || 1000, h[:rule_id].to_s] }, evaluated_count: evaluated }
     end,
 
+    # Orchestrate logic with mapping support + unconditional table-id validation
     evaluate_email_by_rules_exec: lambda do |connection, input, config|
       email = call(:normalize_email, connection, input['email'] || {})
 
@@ -1813,15 +1869,28 @@ require 'csv'
 
       if source == 'custom'
         error('api_token is required in connector connection to read custom rules from Data Tables') unless connection['api_token'].present?
-        call(:validate_table_id, table_id)
+        call(:validate_table_id, table_id) # <- unconditional validation
 
+        # Load schema and validate required set with mapping
         table_info = call(:devapi_get_table, connection, table_id)
         schema     = table_info['schema'] || table_info.dig('data', 'schema') || []
 
         required   = %w[rule_id rule_type rule_pattern action priority active]
-        call(:validate_rules_schema!, connection, schema, required)
 
-        rules     = call(:dt_query_rules_all, connection, table_id, required, max_rules, schema)
+        # Build optional column mapping from config
+        mapping = {}
+        if config['enable_column_mapping']
+          %w[col_rule_id col_rule_type col_rule_pattern col_action col_priority col_active].each do |ck|
+            v = (config[ck] || '').to_s.strip
+            next if v.empty?
+            key = ck.sub(/^col_/, '')
+            mapping[key] = v
+          end
+        end
+
+        call(:validate_rules_schema!, connection, schema, required, mapping)
+
+        rules     = call(:dt_query_rules_all, connection, table_id, required, max_rules, schema, mapping)
         applied   = call(:apply_rules_to_email, connection, email, rules, stop_on)
         matches   = applied[:matches]
         evaluated_count = applied[:evaluated_count]
