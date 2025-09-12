@@ -6,12 +6,15 @@ require 'csv'
 {
   title: "RAG Utilities",
   description: "Custom utility functions for RAG email response system",
-  version: "1.1", # NEW: bump
+  version: "1.1", # Increment for every change
+  help: ->() { "Provides text processing, chunking, similarity, prompt building, and validation utilities for retrieval-augmented generation (RAG) systems." },
+  author: "",
 
   # ==========================================
   # CONNECTION CONFIGURATION
   # ==========================================
   connection: {
+    help: ->() { "Configure default settings for text processing. These can be overriden in individual actions. Environment selection determines logging verbosity and processing limits." },
     fields: [
       {
         name: "developer_api_host",
@@ -80,7 +83,6 @@ require 'csv'
         group: "Similarity defaults"
       }
     ],
-
     authorization: {
       type: "custom_auth",
       apply: lambda do |connection|
