@@ -389,9 +389,7 @@ require 'csv'
       description: "Build retrieval‑augmented generation prompt",
       help: lambda do
         {
-          body: "Use a built‑in template or select a custom template from Data Tables. Custom selection requires API token & table access.",
-          learn_more_url: "https://docs.workato.com/developing-connectors/sdk/guides/advanced-connector-guide/introduction.html",
-          learn_more_text: "Advanced connector guide"
+          body: "Use a built‑in template or select a custom template from Data Tables. Custom selection requires API token & table access."
         }
       end,
 
@@ -402,7 +400,8 @@ require 'csv'
           control_type: "select",
           pick_list: [["Template-based", "template"], ["Custom instructions", "custom"]],
           default: "template",
-          sticky: true
+          sticky: true,
+          support_pills: false
         },
         {
           name: "template_source",
@@ -410,36 +409,41 @@ require 'csv'
           control_type: "select",
           pick_list: [["Built-in", "builtin"], ["Custom (Data Tables)", "custom"]],
           default: "builtin",
-          sticky: true
+          sticky: true,
+          support_pills: false
         },
         {
           name: "templates_table_id",
           label: "Templates table (Data Tables)",
           control_type: "select",
           pick_list: "tables",
-          ngIf: 'config.template_source == "custom"',
-          hint: "Required when Template source = Custom"
+          ngIf: 'input.template_source == "custom"', # <- fix root to input
+          hint: "Required when Template source = Custom",
+          support_pills: false
         },
         {
           name: "template_display_field",
           label: "Display field name",
           type: "string", default: "name", optional: true, sticky: true,
-          ngIf: 'config.template_source == "custom"',
-          hint: "Column shown in the dropdown"
+          ngIf: 'input.template_source == "custom"', # <- fix root to input
+          hint: "Column shown in the dropdown",
+          support_pills: false
         },
         {
           name: "template_value_field",
           label: "Value field name",
           type: "string", default: "", optional: true, sticky: true,
-          ngIf: 'config.template_source == "custom"',
-          hint: "Stored value for the selection. Leave blank to use the Record ID."
+          ngIf: 'input.template_source == "custom"', # <- fix root to input
+          hint: "Stored value for the selection. Leave blank to use the Record ID.",
+          support_pills: false
         },
         {
           name: "template_content_field",
           label: "Content field name",
           type: "string", default: "content", optional: true, sticky: true,
-          ngIf: 'config.template_source == "custom"',
-          hint: "Column containing the prompt text"
+          ngIf: 'input.template_source == "custom"', # <- fix root to input
+          hint: "Column containing the prompt text",
+          support_pills: false
         }
       ],
 
