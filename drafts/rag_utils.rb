@@ -19,7 +19,7 @@ require 'csv'
         hint: "Only required when using custom rules from Data Tables. Defaults to EU. Find more information about [Workato Data Centers](https://docs.workato.com/en/workato-api.html#base-url).",
         optional: true,
         control_type: "select",
-        pick_list: [
+        options: [
           ["US (www.workato.com)", "www"],
           ["EU (app.eu.workato.com)", "app.eu"],
           ["JP (app.jp.workato.com)", "app.jp"],
@@ -43,7 +43,7 @@ require 'csv'
         hint: "Select the environment for the connector",
         optional: false,
         control_type: "select",
-        pick_list: [
+        options: [
           ["Development", "development"],
           ["Staging", "staging"],
           ["Production", "production"]
@@ -361,7 +361,17 @@ require 'csv'
           fields << {
             name: "prompt_template", label: "Prompt Template",
             type: "string", group: "Template Settings",
-            control_type: "select", pick_list: "prompt_templates", optional: true,
+            control_type: "select",
+            pick_list: "prompt_templates",
+            # pass config into the pick list (dependent pick list)
+            pick_list_params: {
+              template_source: (config['template_source'] || 'builtin'),
+              templates_table_id: config['templates_table_id'],
+              template_display_field: (config['template_display_field'] || 'name'),
+              template_value_field: (config['template_value_field'] || ''),
+              template_content_field: (config['template_content_field'] || 'content')
+            },
+            optional: true,
             toggle_hint: "Select",
             toggle_field: {
               name: "prompt_template", label: "Template (custom text)",
@@ -708,7 +718,6 @@ require 'csv'
             type: "string", optional: true, sticky: true,
             hint: "From configuration above.",
             default: config["custom_rules_table_id"],
-            render_input: "readonly", # purely informational
             group: "Advanced"
           }
         end
@@ -1740,7 +1749,7 @@ require 'csv'
 
       if source == 'custom'
         error('api_token is required in connector connection to read custom rules from Data Tables') unless connection['api_token'].present?
-        call(:validate_table_id, table_id) if table_id.blank? # raises if blank/invalid
+        call(:validate_table_id, table_id) # if table_id.blank? << removed, we want to validate both blank and malformed UUIDs.
 
         # Fetch schema once & validate required columns
         table_info = call(:devapi_get_table, connection, table_id)
@@ -2174,20 +2183,32 @@ require 'csv'
       ]
     end,
 
-    prompt_templates: lambda do |connection, config|
-      src = (config['template_source'] || 'builtin').to_s
-      if src == 'custom'
-        if connection['api_token'].blank? || (config['templates_table_id'] || '').to_s.strip.empty?
-          [[ "Configure API token and Templates table in action config", nil ]]
-        else
-          call(:pick_templates_from_table, connection, config)
+    prompt_templates: lambda do |connection,
+      template_source: 'builtin',
+      templates_table_id: nil,
+      template_display_field: 'name',
+      template_value_field: nil,
+      template_content_field: 'content'|
+
+      if template_source.to_s == 'custom'
+        if connection['api_token'].blank? || templates_table_id.to_s.strip.empty?
+          return [[ "Configure API token and Templates table in action config", nil ]]
         end
+
+        # Reuse your existing method; feed it the needed fields
+        cfg = {
+          'templates_table_id'      => templates_table_id,
+          'template_display_field'  => template_display_field,
+          'template_value_field'    => (template_value_field || '').to_s,
+          'template_content_field'  => template_content_field
+        }
+        call(:pick_templates_from_table, connection, cfg)
       else
         [
-          ["Standard RAG", "standard"],
-          ["Customer Service", "customer_service"],
-          ["Technical Support", "technical"],
-          ["Sales Inquiry", "sales"]
+          ["Standard RAG",        "standard"],
+          ["Customer Service",    "customer_service"],
+          ["Technical Support",   "technical"],
+          ["Sales Inquiry",       "sales"]
         ]
       end
     end,
