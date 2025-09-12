@@ -289,7 +289,7 @@ require 'csv'
         method = (config['similarity_method'] || 'cosine').to_s
         unless method == 'dot_product'
           fields << {
-            name: "normalize", label: "Normalize vectors",
+            name: "normalize", label: "Normalize vectors", control_type: "checkbox",
             type: "boolean", default: true, optional: true,
             hint: "Ignored for dot product.", group: "Options"
           }
@@ -483,7 +483,7 @@ require 'csv'
             group: "Advanced", hint: "Optional configuration",
             properties: [
               { name: "max_context_length", label: "Max context length (tokens)", type: "integer", default: 3000, convert_input: "integer_conversion", hint: "Maximum tokens for context" },
-              { name: "include_metadata", label: "Include metadata", type: "boolean", default: false, convert_input: "boolean_conversion", hint: "Include document metadata in prompt" }
+              { name: "include_metadata", label: "Include metadata", type: "boolean", control_type: "checkbox", default: false, convert_input: "boolean_conversion", hint: "Include document metadata in prompt" }
             ]
           }
         ]
@@ -495,7 +495,7 @@ require 'csv'
           { name: "formatted_prompt", type: "string" },
           { name: "token_count", type: "integer" },
           { name: "context_used", type: "integer" },
-          { name: "truncated", type: "boolean" },
+          { name: "truncated", type: "boolean", control_type: "checkbox" },
           { name: "prompt_metadata", type: "object" }
         ]
       end,
@@ -573,11 +573,11 @@ require 'csv'
 
       output_fields: lambda do
         [
-          { name: "is_valid", type: "boolean" },
+          { name: "is_valid", type: "boolean", control_type: "checkbox" },
           { name: "confidence_score", type: "number" },
           { name: "validation_results", type: "object" },
           { name: "issues_found", type: "array", of: "string" },
-          { name: "requires_human_review", type: "boolean" },
+          { name: "requires_human_review", type: "boolean", control_type: "checkbox" },
           { name: "suggested_improvements", type: "array", of: "string" }
         ]
       end,
@@ -615,8 +615,8 @@ require 'csv'
           { name: "document_content", label: "Document content", type: "string", optional: false, control_type: "text-area" },
           { name: "file_path", label: "File path", type: "string", optional: false },
           { name: "file_type", label: "File type", type: "string", optional: true, control_type: "select", pick_list: "file_types" },
-          { name: "extract_entities", label: "Extract entities", type: "boolean", optional: true, default: true },
-          { name: "generate_summary", label: "Generate summary", type: "boolean", optional: true, default: true }
+          { name: "extract_entities", label: "Extract entities", type: "boolean", optional: true, default: true, control_type: "checkbox" },
+          { name: "generate_summary", label: "Generate summary", type: "boolean", optional: true, default: true, control_type: "checkbox" }
         ]
       end,
 
@@ -677,13 +677,13 @@ require 'csv'
 
       output_fields: lambda do |object_definitions|
         [
-          { name: "has_changed", type: "boolean" },
+          { name: "has_changed", type: "boolean", control_type: "checkbox" },
           { name: "change_type", type: "string" },
           { name: "change_percentage", type: "number" },
           { name: "added_content", type: "array", of: "string" },
           { name: "removed_content", type: "array", of: "string" },
           { name: "modified_sections", type: "array", of: "object", properties: object_definitions["diff_section"] },
-          { name: "requires_reindexing", type: "boolean" }
+          { name: "requires_reindexing", type: "boolean", control_type: "checkbox" }
         ]
       end,
 
@@ -721,7 +721,7 @@ require 'csv'
           { name: "metric_type", label: "Metric type", type: "string", optional: false, control_type: "select", pick_list: "metric_types" },
           { name: "data_points", label: "Data points", list_mode_toggle: true, type: "array", of: "object", optional: false, properties: object_definitions["metric_datapoint"] },
           { name: "aggregation_period", label: "Aggregation period", type: "string", optional: true, default: "hour", control_type: "select", pick_list: "time_periods" },
-          { name: "include_percentiles", label: "Include percentiles", type: "boolean", convert_input: "boolean_conversion", optional: true, default: true }
+          { name: "include_percentiles", label: "Include percentiles", type: "boolean", control_type: "checkbox", convert_input: "boolean_conversion", optional: true, default: true }
         ]
       end,
 
@@ -847,13 +847,13 @@ require 'csv'
             properties: object_definitions["email_envelope"], group: "Email"
           },
           {
-            name: "stop_on_first_match", label: "Stop on first match",
+            name: "stop_on_first_match", label: "Stop on first match", control_type: "checkbox",
             type: "boolean", default: true, optional: true, sticky: true,
             hint: "When true, returns as soon as a rule matches.", group: "Execution"
           },
           {
             name: "fallback_to_standard", label: "Fallback to standard patterns",
-            type: "boolean", default: true, optional: true, sticky: true,
+            type: "boolean", default: true, optional: true, sticky: true, control_type: "checkbox",
             hint: "If custom rules have no match, also evaluate built‑in standard patterns.", group: "Execution"
           },
           {
@@ -876,7 +876,7 @@ require 'csv'
 
       output_fields: lambda do |object_definitions|
         [
-          { name: "pattern_match", type: "boolean" },
+          { name: "pattern_match", type: "boolean", control_type: "checkbox" },
           { name: "rule_source", type: "string" }, # "custom", "standard", or "none"
           { name: "selected_action", type: "string" },
           { name: "top_match", type: "object", properties: object_definitions["rules_row"] },
@@ -885,7 +885,7 @@ require 'csv'
           {
             name: "debug", type: "object", properties: [
               { name: "evaluated_rules_count", type: "integer" },
-              { name: "schema_validated", type: "boolean" },
+              { name: "schema_validated", type: "boolean", control_type: "checkbox" },
               { name: "errors", type: "array", of: "string" }
             ]
           }
@@ -2097,8 +2097,8 @@ require 'csv'
         [
           { name: "chunk_size", label: "Chunk size (tokens)", type: "integer", default: 1000, convert_input: "integer_conversion", sticky: true, hint: "Maximum tokens per chunk" },
           { name: "chunk_overlap", label: "Chunk overlap (tokens)", type: "integer", default: 100, convert_input: "integer_conversion", sticky: true, hint: "Token overlap between chunks" },
-          { name: "preserve_sentences", label: "Preserve sentences", type: "boolean", default: true, convert_input: "boolean_conversion", sticky: true, hint: "Don't break mid‑sentence" },
-          { name: "preserve_paragraphs", label: "Preserve paragraphs", type: "boolean", default: false, convert_input: "boolean_conversion", sticky: true, hint: "Try to keep paragraphs intact" }
+          { name: "preserve_sentences", label: "Preserve sentences", type: "boolean", control_type: "checkbox", default: true, convert_input: "boolean_conversion", sticky: true, hint: "Don't break mid‑sentence" },
+          { name: "preserve_paragraphs", label: "Preserve paragraphs", type: "boolean", control_type: "checkbox", default: false, convert_input: "boolean_conversion", sticky: true, hint: "Try to keep paragraphs intact" }
         ]
       end
     },
@@ -2116,11 +2116,11 @@ require 'csv'
     email_cleaning_options: {
       fields: lambda do
         [
-          { name: "remove_signatures",  label: "Remove signatures",     type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
-          { name: "remove_quotes",      label: "Remove quoted text",    type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
-          { name: "remove_disclaimers", label: "Remove disclaimers",    type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
-          { name: "normalize_whitespace", label: "Normalize whitespace", type: "boolean", default: true, convert_input: "boolean_conversion", sticky: true, group: "Options" },
-          { name: "extract_urls",       label: "Extract URLs",          type: "boolean", default: false, convert_input: "boolean_conversion", sticky: true, group: "Options" }
+          { name: "remove_signatures",  label: "Remove signatures",     type: "boolean", default: true,  control_type: "checkbox", convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "remove_quotes",      label: "Remove quoted text",    type: "boolean", default: true,  control_type: "checkbox", convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "remove_disclaimers", label: "Remove disclaimers",    type: "boolean", default: true,  control_type: "checkbox", convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "normalize_whitespace", label: "Normalize whitespace", type: "boolean", default: true, control_type: "checkbox", convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "extract_urls",       label: "Extract URLs",          type: "boolean", default: false, control_type: "checkbox", convert_input: "boolean_conversion", sticky: true, group: "Options" }
         ]
       end
     },
@@ -2142,13 +2142,13 @@ require 'csv'
     similarity_result: {
       fields: lambda do
         [
-          { name: "similarity_score", type: "number", label: "Similarity score", hint: "0–1 for cosine/euclidean; unbounded for dot product" },
-          { name: "similarity_percentage", type: "number", label: "Similarity percentage", hint: "0–100; only for cosine/euclidean" },
-          { name: "is_similar", type: "boolean", label: "Is similar", hint: "Whether the vectors meet the threshold" },
-          { name: "similarity_type", type: "string", label: "Similarity type", hint: "cosine, euclidean, or dot_product" },
-          { name: "computation_time_ms", type: "integer", label: "Computation time (ms)" },
-          { name: "threshold_used", type: "number", label: "Threshold used", optional: true },
-          { name: "vectors_normalized", type: "boolean", label: "Vectors normalized", optional: true }
+          { name: "similarity_score",       type: "number", label: "Similarity score", hint: "0–1 for cosine/euclidean; unbounded for dot product" },
+          { name: "similarity_percentage",  type: "number", label: "Similarity percentage", hint: "0–100; only for cosine/euclidean" },
+          { name: "is_similar",             type: "boolean", control_type: "checkbox", label: "Is similar", hint: "Whether the vectors meet the threshold" },
+          { name: "similarity_type",        type: "string", label: "Similarity type", hint: "cosine, euclidean, or dot_product" },
+          { name: "computation_time_ms",    type: "integer", label: "Computation time (ms)" },
+          { name: "threshold_used",         type: "number", label: "Threshold used", optional: true },
+          { name: "vectors_normalized",     type: "boolean", control_type: "checkbox", label: "Vectors normalized", optional: true }
         ]
       end
     }
