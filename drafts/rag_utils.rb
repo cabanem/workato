@@ -6,8 +6,8 @@ require 'csv'
 {
   title: "RAG Utilities",
   description: "Custom utility functions for RAG email response system",
-  version: "1.0",
-  
+  version: "1.1", # NEW: bump
+
   # ==========================================
   # CONNECTION CONFIGURATION
   # ==========================================
@@ -16,7 +16,7 @@ require 'csv'
       {
         name: "developer_api_host",
         label: "Workato region",
-        hint: "Only required when using custom rules from Data Tables. Defaults to EU. Find more information about [Workato Data Centers](https://docs.workato.com/en/workato-api.html#base-url).",
+        hint: "Only required when using Developer API/Data Tables. Defaults to EU. See data centers & base URLs.",
         optional: true,
         control_type: "select",
         options: [
@@ -28,108 +28,142 @@ require 'csv'
           ["IL (app.il.workato.com)", "app.il"],
           ["Developer sandbox (app.trial.workato.com)", "app.trial"]
         ],
-        default: "app.eu"
+        default: "app.eu",
+        sticky: true,
+        group: "Developer API (optional)"
       },
       {
         name: "api_token",
         label: "API token (Bearer)",
-        hint: "Workspace admin → API clients → API keys",
+        hint: "Workspace admin → API clients → API keys. Must allow GET /api/users/me and Data tables if used.",
         control_type: "password",
-        optional: true
+        optional: true,
+        sticky: true,
+        group: "Developer API (optional)"
       },
       {
         name: "environment",
         label: "Environment",
-        hint: "Select the environment for the connector",
+        hint: "For your own labeling; not sent to APIs.",
         optional: false,
         control_type: "select",
-        options: [
-          ["Development", "development"],
-          ["Staging", "staging"],
-          ["Production", "production"]
-        ],
-        default: "development"
+        pick_list: "environments",
+        default: "dev",
+        sticky: true
+      },
+      # Defaults to keep actions clean
+      {
+        name: "chunk_size_default", label: "Default chunk size (tokens)",
+        hint: "Used when Smart Chunk Text runs in 'Use Connection Defaults'.",
+        optional: true, default: 1000,
+        control_type: "number", type: "integer",
+        convert_input: "integer_conversion",
+        group: "Chunking defaults", sticky: true
       },
       {
-        name: "chunk_size_default", label: "Default Chunk Size",
-        hint: "Default token size for text chunks", optional: true,
-        default: 1000, control_type: "number", type: "integer", convert_input: "integer_conversion"
+        name: "chunk_overlap_default", label: "Default chunk overlap (tokens)",
+        hint: "Used when Smart Chunk Text runs in 'Use Connection Defaults'.",
+        optional: true, default: 100,
+        control_type: "number", type: "integer",
+        convert_input: "integer_conversion",
+        group: "Chunking defaults", sticky: true
       },
       {
-        name: "chunk_overlap_default", label: "Default Chunk Overlap",
-        hint: "Default token overlap between chunks", optional: true,
-        default: 100, control_type: "number", type: "integer", convert_input: "integer_conversion"
-      },
-      {
-        name: "similarity_threshold", label: "Similarity Threshold",
-        hint: "Minimum similarity score (0-1)", optional: true,
-        type: "number", control_type: "number", default: 0.7,
-        convert_input: "float_conversion"
+        name: "similarity_threshold", label: "Similarity threshold",
+        hint: "For cosine/euclidean: 0–1. For dot product: scale depends on embeddings; use custom per model.",
+        optional: true, default: 0.7,
+        type: "number", control_type: "number",
+        convert_input: "float_conversion",
+        group: "Similarity defaults", sticky: true
       }
     ],
-    
+
     authorization: {
       type: "custom_auth",
       apply: lambda do |connection|
         if connection['api_token'].present?
-          headers('Authorization' => "Bearer #{connection['api_token']}",
-                  'Accept' => 'application/json')
+          headers(
+            'Authorization' => "Bearer #{connection['api_token']}",
+            'Accept'        => 'application/json'
+          )
         end
       end
     },
+
     base_uri: lambda do |connection|
       host = (connection['developer_api_host'].presence || 'app.eu').to_s
       "https://#{host}.workato.com"
     end
   },
-  
+
   # ==========================================
   # CONNECTION TEST
   # ==========================================
   test: lambda do |connection|
+    # Always return something informative for UX; only call APIs if token provided
+    result = { environment: connection["environment"] || "dev" }
+
     if connection['api_token'].present?
-      # Verify token and region
-      whoami = get("#{call(:devapi_base, connection)}/api/users/me")
-      { environment: connection["environment"], account: whoami["name"] || whoami["id"], status: "connected" }
+      # Validate token + region (users.me) and Data Tables listing for completeness
+      whoami = call(:execute_with_retry, connection, lambda { get('/api/users/me') })
+      result[:account]   = whoami["name"] || whoami["id"]
+      result[:region]    = connection['developer_api_host']
+      # Data tables are optional; verify reachability if permitted
+      begin
+        _tables = call(:execute_with_retry, connection, lambda { get('/api/data_tables', page: 1, per_page: 1) })
+        result[:data_tables] = "reachable"
+      rescue RestClient::ExceptionWithResponse => e
+        # Token may not have this privilege; surface gently
+        result[:data_tables] = "not reachable (#{e.http_code})"
+      end
+      result[:status] = "connected"
     else
-      { environment: connection["environment"], status: "connected (no API token)" }
+      result[:status] = "connected (no API token)"
     end
+
+    result
   end,
-  
+
   # ==========================================
   # ACTIONS
   # ==========================================
   actions: {
-    
+
     # ------------------------------------------
     # 1. SMART CHUNK TEXT
     # ------------------------------------------
     smart_chunk_text: {
       title: "Smart Chunk Text",
       subtitle: "Intelligently chunk text preserving context",
-      help: lambda { { body: "Splits text into chunks with smart boundaries and overlap." } },
-      description: "Intelligently chunk text",
+      description: "Split text into chunks with smart boundaries and overlap.",
+      help: lambda do
+        {
+          body: "Splits text into token‑approximate chunks using sentence/paragraph boundaries and overlap. Use connection defaults to avoid per‑step config.",
+          learn_more_url: "https://docs.workato.com/developing-connectors/sdk/sdk-reference/schema.html#using-convert_input-and-convert_output-for-easy-transformations",
+          learn_more_text: "Schema & conversions"
+        }
+      end,
 
       config_fields: [
         {
           name: "use_custom_settings",
-          label: "Configuration Mode",
+          label: "Configuration mode",
           control_type: "select",
           pick_list: [
-            ["Use Connection Defaults", "defaults"],
-            ["Custom Settings", "custom"]
+            ["Use connection defaults", "defaults"],
+            ["Custom settings", "custom"]
           ],
           default: "defaults",
           sticky: true,
-          hint: "Use connection defaults or override below"
+          hint: "Select 'Custom' to override connection defaults."
         }
       ],
 
       input_fields: lambda do |object_definitions, connection, config|
         fields = [
-          { name: "text", label: "Input Text", type: "string",
+          { name: "text", label: "Input text", type: "string",
             optional: false, control_type: "text-area",
-            hint: "Text content to be chunked" }
+            hint: "Raw text to be chunked" }
         ]
         if config["use_custom_settings"] == "custom"
           fields.concat(object_definitions["chunking_config"])
@@ -141,18 +175,34 @@ require 'csv'
         object_definitions["chunking_result"]
       end,
 
+      sample_output: lambda do
+        {
+          "chunks" => [
+            { "chunk_id" => "chunk_0", "chunk_index" => 0, "text" => "Lorem ipsum…", "token_count" => 120, "start_char" => 0, "end_char" => 480, "metadata" => { "has_overlap" => false, "is_final" => false } }
+          ],
+          "total_chunks" => 1,
+          "total_tokens" => 120
+        }
+      end,
+
       execute: lambda do |connection, input, _eis, _eos, config|
         if config["use_custom_settings"] != "custom"
-          # rely on convert_input on connection fields; keep as integers
-          input['chunk_size']     ||= connection['chunk_size_default']
-          input['chunk_overlap']  ||= connection['chunk_overlap_default']
-          input['preserve_sentences']  = true if input['preserve_sentences'].nil?
+          input['chunk_size']     ||= (connection['chunk_size_default'] || 1000)
+          input['chunk_overlap']  ||= (connection['chunk_overlap_default'] || 100)
+          input['preserve_sentences']  = true  if input['preserve_sentences'].nil?
           input['preserve_paragraphs'] = false if input['preserve_paragraphs'].nil?
         end
+
+        # Guards for pathological inputs
+        cs = (input['chunk_size'] || 1000).to_i
+        co = (input['chunk_overlap'] || 100).to_i
+        error("Chunk size must be > 0")        if cs <= 0
+        error("Chunk overlap must be >= 0")    if co < 0
+
         call(:chunk_text_with_overlap, input)
       end
     },
-    
+
     # ------------------------------------------
     # 2. CLEAN EMAIL TEXT
     # ------------------------------------------
@@ -160,12 +210,18 @@ require 'csv'
       title: "Clean Email Text",
       subtitle: "Preprocess email content for RAG",
       description: "Clean and preprocess email body text",
-      help: lambda { { body: "Removes signatures, quoted text, disclaimers; normalizes whitespace; optional URL extraction." } },
+      help: lambda do
+        {
+          body: "Removes signatures, quoted text, disclaimers; normalizes whitespace; optional URL extraction.",
+          learn_more_url: "https://docs.workato.com/developing-connectors/sdk/sdk-reference/actions.html#help",
+          learn_more_text: "Action help patterns"
+        }
+      end,
 
       input_fields: lambda do |object_definitions|
         [
-          { 
-            name: "email_body", label: "Email Body", type: "string", optional: false, 
+          {
+            name: "email_body", label: "Email body", type: "string", optional: false,
             control_type: "text-area", hint: "Raw email body text to be cleaned"
           }
         ] + object_definitions["email_cleaning_options"]
@@ -175,11 +231,23 @@ require 'csv'
         object_definitions["email_cleaning_result"]
       end,
 
+      sample_output: lambda do
+        {
+          "cleaned_text" => "Hello team, …",
+          "extracted_query" => "Hello team, …",
+          "removed_sections" => ["--\nJohn\n"],
+          "extracted_urls" => ["https://example.com"],
+          "original_length" => 1024,
+          "cleaned_length" => 680,
+          "reduction_percentage" => 33.59
+        }
+      end,
+
       execute: lambda do |_connection, input|
         call(:process_email_text, input)
       end
     },
-    
+
     # ------------------------------------------
     # 3. CALCULATE SIMILARITY
     # ------------------------------------------
@@ -187,11 +255,18 @@ require 'csv'
       title: "Calculate Vector Similarity",
       subtitle: "Compute similarity scores for vectors",
       description: "Compute similarity between embedding vectors",
+      help: lambda do
+        {
+          body: "Supports cosine, euclidean, and dot product. Dot product without normalization requires a model‑appropriate absolute threshold.",
+          learn_more_url: "https://docs.workato.com/developing-connectors/sdk/guides/config_fields.html",
+          learn_more_text: "Dynamic fields via config_fields"
+        }
+      end,
 
       config_fields: [
         {
           name: "similarity_method",
-          label: "Similarity Method",
+          label: "Similarity method",
           control_type: "select",
           pick_list: "similarity_types",
           default: "cosine",
@@ -203,10 +278,10 @@ require 'csv'
       input_fields: lambda do |_object_definitions, _connection, config|
         fields = [
           {
-            name: "vectors", label: "Vectors to Compare", type: "object",
+            name: "vectors", label: "Vectors to compare", type: "object",
             properties: [
-              { name: "vector_a", label: "First Vector", type: "array", of: "number", list_mode_toggle: true, optional: false },
-              { name: "vector_b", label: "Second Vector", type: "array", of: "number", list_mode_toggle: true, optional: false }
+              { name: "vector_a", label: "First vector",  type: "array", of: "number", list_mode_toggle: true, optional: false },
+              { name: "vector_b", label: "Second vector", type: "array", of: "number", list_mode_toggle: true, optional: false }
             ],
             group: "Vectors"
           }
@@ -214,7 +289,7 @@ require 'csv'
         method = (config['similarity_method'] || 'cosine').to_s
         unless method == 'dot_product'
           fields << {
-            name: "normalize", label: "Normalize Vectors",
+            name: "normalize", label: "Normalize vectors",
             type: "boolean", default: true, optional: true,
             hint: "Ignored for dot product.", group: "Options"
           }
@@ -226,9 +301,22 @@ require 'csv'
         object_definitions["similarity_result"]
       end,
 
+      sample_output: lambda do
+        {
+          "similarity_score" => 0.873421,
+          "similarity_percentage" => 87.34,
+          "is_similar" => true,
+          "similarity_type" => "cosine",
+          "computation_time_ms" => 2,
+          "threshold_used" => 0.7,
+          "vectors_normalized" => true
+        }
+      end,
+
       execute: lambda do |connection, input, _eis, _eos, config|
-        input['vector_a'] = input.dig('vectors', 'vector_a')
-        input['vector_b'] = input.dig('vectors', 'vector_b')
+        input['vector_a'] = Array(input.dig('vectors', 'vector_a'))
+        input['vector_b'] = Array(input.dig('vectors', 'vector_b'))
+        error("Vectors cannot be empty") if input['vector_a'].empty? || input['vector_b'].empty?
         input['similarity_type'] = (config['similarity_method'] || 'cosine')
         call(:compute_similarity, input, connection)
       end
@@ -241,69 +329,78 @@ require 'csv'
       title: "Format Embeddings for Vertex AI",
       subtitle: "Format embeddings for batch processing",
       description: "Prepare embedding data for Vertex AI Vector Search",
-      help: ->() {"Formats embedding vectors into batches suitable for Vertex AI Vector Search ingestion, supporting JSON, JSONL, and CSV formats."},
+      help: lambda do
+        {
+          body: "Formats embedding vectors into batches suitable for vector ingestion with JSON/JSONL/CSV payloads.",
+          learn_more_url: "https://docs.workato.com/developing-connectors/sdk/sdk-reference/object_definitions.html",
+          learn_more_text: "Object definitions"
+        }
+      end,
 
       input_fields: lambda do |object_definitions|
         [
           {
-            name: "embeddings", label: "Embeddings Data",
+            name: "embeddings", label: "Embeddings data",
             type: "array", of: "object",
             properties: object_definitions["embedding_object"],
-            list_mode_toggle: true # allow dynamic-list pills vs static
+            list_mode_toggle: true
           },
-          { name: "index_endpoint", label: "Index Endpoint ID", type: "string", optional: false },
-          { name: "batch_size", label: "Batch Size", type: "integer", optional: true, default: 25, hint: "Embeddings per batch" },
+          { name: "index_endpoint", label: "Index endpoint ID", type: "string", optional: false },
+          { name: "batch_size", label: "Batch size", type: "integer", optional: true, default: 25, hint: "Embeddings per batch" },
           {
-            name: "format_type", label: "Format Type", 
-            type: "string", optional: true, default: "json", 
+            name: "format_type", label: "Format type",
+            type: "string", optional: true, default: "json",
             control_type: "select", pick_list: "format_types",
-            toggle_hint: "Select", 
-            toggle_field: {
-              name: "format_type", label: "Format Type (custom)",
-              type: "string", control_type: "text", toggle_hint: "Use text" 
-            }
+            toggle_hint: "Select",
+            toggle_field: { name: "format_type", label: "Format type (custom)", type: "string", control_type: "text", toggle_hint: "Use text" }
           }
         ]
       end,
 
       output_fields: lambda do |object_definitions|
         [
-          {
-            name: "formatted_batches",
-            type: "array",
-            of: "object",
-            properties: object_definitions["vertex_batch"]
-          },
+          { name: "formatted_batches", type: "array", of: "object", properties: object_definitions["vertex_batch"] },
           { name: "total_batches", type: "integer" },
           { name: "total_embeddings", type: "integer" },
           { name: "index_endpoint", type: "string" },
           { name: "format", type: "string" },
-          { name: "payload", type: "string" } # JSON/JSONL/CSV string per format_type
+          { name: "payload", type: "string" }
         ]
+      end,
+
+      sample_output: lambda do
+        {
+          "formatted_batches" => [{ "batch_id" => "batch_0", "batch_number" => 0, "datapoints" => [], "size" => 0 }],
+          "total_batches" => 1, "total_embeddings" => 0, "index_endpoint" => "idx-123", "format" => "json", "payload" => "[]"
+        }
       end,
 
       execute: lambda do |_connection, input|
         call(:format_for_vertex_ai, input)
       end
     },
-    
+
     # ------------------------------------------
     # 5. BUILD RAG PROMPT
     # ------------------------------------------
     build_rag_prompt: {
       title: "Build RAG Prompt",
       subtitle: "Construct optimized RAG prompt",
-      description: "Build retrieval-augmented generation prompt",
+      description: "Build retrieval‑augmented generation prompt",
+      help: lambda do
+        {
+          body: "Use a built‑in template or select a custom template from Data Tables. Custom selection requires API token & table access.",
+          learn_more_url: "https://docs.workato.com/developing-connectors/sdk/guides/advanced-connector-guide/introduction.html",
+          learn_more_text: "Advanced connector guide"
+        }
+      end,
 
       config_fields: [
         {
           name: "prompt_mode",
-          label: "Prompt Configuration",
+          label: "Prompt configuration",
           control_type: "select",
-          pick_list: [
-            ["Template-based", "template"],
-            ["Custom Instructions", "custom"]
-          ],
+          pick_list: [["Template-based", "template"], ["Custom instructions", "custom"]],
           default: "template",
           sticky: true
         },
@@ -348,10 +445,9 @@ require 'csv'
 
       input_fields: lambda do |object_definitions, _connection, config|
         fields = [
-          { name: "query", label: "User Query", type: "string",
-            optional: false, control_type: "text-area", group: "Query" },
+          { name: "query", label: "User query", type: "string", optional: false, control_type: "text-area", group: "Query" },
           {
-            name: "context_documents", label: "Context Documents",
+            name: "context_documents", label: "Context documents",
             type: "array", of: "object",
             properties: object_definitions["context_document"],
             list_mode_toggle: true, optional: false, group: "Context"
@@ -359,11 +455,9 @@ require 'csv'
         ]
         if config["prompt_mode"] == "template"
           fields << {
-            name: "prompt_template", label: "Prompt Template",
-            type: "string", group: "Template Settings",
-            control_type: "select",
-            pick_list: "prompt_templates",
-            # pass config into the pick list (dependent pick list)
+            name: "prompt_template", label: "Prompt template",
+            type: "string", group: "Template settings",
+            control_type: "select", pick_list: "prompt_templates",
             pick_list_params: {
               template_source: (config['template_source'] || 'builtin'),
               templates_table_id: config['templates_table_id'],
@@ -373,30 +467,23 @@ require 'csv'
             },
             optional: true,
             toggle_hint: "Select",
-            toggle_field: {
-              name: "prompt_template", label: "Template (custom text)",
-              type: "string", control_type: "text", toggle_hint: "Use text"
-            }
+            toggle_field: { name: "prompt_template", label: "Template (custom text)", type: "string", control_type: "text", toggle_hint: "Use text" }
           }
         else
           fields << {
-            name: "system_instructions", label: "System Instructions",
+            name: "system_instructions", label: "System instructions",
             type: "string", control_type: "text-area", optional: true,
-            hint: "Custom system instructions for the prompt", group: "Custom Settings"
+            hint: "Custom system instructions for the prompt", group: "Custom settings"
           }
         end
 
-        fields +=[
+        fields += [
           {
-            name: "advanced_settings", label: "Advanced Settings", type: "object", optional: true,
-            group: "Advanced", hint: "Optional advanced configuration",
+            name: "advanced_settings", label: "Advanced settings", type: "object", optional: true,
+            group: "Advanced", hint: "Optional configuration",
             properties: [
-              { name: "max_context_length", label: "Max Context Length",
-                type: "integer", default: 3000, convert_input: "integer_conversion",
-                hint: "Maximum tokens for context" },
-              { name: "include_metadata", label: "Include Metadata",
-                type: "boolean", default: false, convert_input: "boolean_conversion",
-                hint: "Include document metadata in prompt" }
+              { name: "max_context_length", label: "Max context length (tokens)", type: "integer", default: 3000, convert_input: "integer_conversion", hint: "Maximum tokens for context" },
+              { name: "include_metadata", label: "Include metadata", type: "boolean", default: false, convert_input: "boolean_conversion", hint: "Include document metadata in prompt" }
             ]
           }
         ]
@@ -413,6 +500,14 @@ require 'csv'
         ]
       end,
 
+      sample_output: lambda do
+        {
+          "formatted_prompt" => "Context:\n…\n\nQuery: …\n\nAnswer:",
+          "token_count" => 512, "context_used" => 3, "truncated" => false,
+          "prompt_metadata" => { "template" => "standard", "using_template_content" => false }
+        }
+      end,
+
       execute: lambda do |connection, input, _eis, _eos, config|
         if input['advanced_settings']
           input.merge!(input['advanced_settings'])
@@ -424,20 +519,12 @@ require 'csv'
           sel    = (input["prompt_template"] || "").to_s
 
           if source == "custom" && config["templates_table_id"].present? && sel.present?
-            # If the user selected from the dropdown (value or record_id), look up content.
-            # If they toggled to text (inline multiline or long), use it directly.
             inline = (sel.include?("\n") || sel.length > 200)
 
             unless inline
-              resolved = call(
-                :resolve_template_selection,
-                connection,
-                config,
-                sel # either record_id or value-field value
-              )
+              resolved = call(:resolve_template_selection, connection, config, sel)
               if resolved && resolved["content"].to_s.strip.length.positive?
                 input["template_content"] = resolved["content"].to_s
-                # Add metadata users may log later
                 input["prompt_metadata"] = {
                   template_source: "custom",
                   templates_table_id: config["templates_table_id"],
@@ -450,7 +537,6 @@ require 'csv'
               input["prompt_metadata"] = { template_source: "inline" }
             end
           elsif sel.present? && (sel.include?("\n") || sel.length > 200)
-            # Built-in path but user toggled to inline text
             input["template_content"] = sel
             input["prompt_metadata"] = { template_source: "inline" }
           end
@@ -459,7 +545,7 @@ require 'csv'
         call(:construct_rag_prompt, input)
       end
     },
-    
+
     # ------------------------------------------
     # 6. VALIDATE LLM RESPONSE
     # ------------------------------------------
@@ -467,20 +553,21 @@ require 'csv'
       title: "Validate LLM Response",
       subtitle: "Validate and score LLM output",
       description: "Check response quality and relevance",
-      help: ->() {"Validates LLM-generated responses against the original query and provided context, applying custom rules and scoring for quality assurance."},
+      help: lambda do
+        {
+          body: "Lightweight heuristics: query overlap, length, rule checks, and confidence score.",
+          learn_more_url: "https://docs.workato.com/developing-connectors/sdk/sdk-reference/actions.html#sample_output",
+          learn_more_text: "Why sample output matters"
+        }
+      end,
 
       input_fields: lambda do |object_definitions|
         [
-          { name: "response_text", label: "LLM Response", type: "string", optional: false, control_type: "text-area" },
-          { name: "original_query", label: "Original Query", type: "string", optional: false },
-          { name: "context_provided", label: "Context Documents", type: "array", of: "string", optional: true, list_mode_toggle: true },
-          {
-            name: "validation_rules",
-            label: "Validation Rules",
-            type: "array", of: "object",
-            properties: object_definitions["validation_rule"], optional: true
-          },
-          { name: "min_confidence", label: "Minimum Confidence", type: "number", convert_input: "float_conversion", optional: true, default: 0.7 }
+          { name: "response_text", label: "LLM response", type: "string", optional: false, control_type: "text-area" },
+          { name: "original_query", label: "Original query", type: "string", optional: false },
+          { name: "context_provided", label: "Context documents", type: "array", of: "string", optional: true, list_mode_toggle: true },
+          { name: "validation_rules", label: "Validation rules", type: "array", of: "object", properties: object_definitions["validation_rule"], optional: true },
+          { name: "min_confidence", label: "Minimum confidence", type: "number", convert_input: "float_conversion", optional: true, default: 0.7, sticky: true }
         ]
       end,
 
@@ -495,6 +582,14 @@ require 'csv'
         ]
       end,
 
+      sample_output: lambda do
+        {
+          "is_valid" => true, "confidence_score" => 0.84,
+          "validation_results" => { "query_overlap" => 0.33, "response_length" => 1100, "word_count" => 230 },
+          "issues_found" => [], "requires_human_review" => false, "suggested_improvements" => []
+        }
+      end,
+
       execute: lambda do |_connection, input|
         call(:validate_response, input)
       end
@@ -507,15 +602,21 @@ require 'csv'
       title: "Generate Document Metadata",
       subtitle: "Extract metadata from documents",
       description: "Generate metadata for document indexing",
-      help: ->() {"Extracts metadata such as language, summary, key topics, and entities from document content to enhance indexing and retrieval."},
+      help: lambda do
+        {
+          body: "Token estimate uses 4 chars/token heuristic; key topics via naive frequency analysis.",
+          learn_more_url: "https://docs.workato.com/developing-connectors/sdk/sdk-reference/object_definitions.html",
+          learn_more_text: "Reusable schemas"
+        }
+      end,
 
       input_fields: lambda do
         [
-          { name: "document_content", label: "Document Content", type: "string", optional: false, control_type: "text-area" },
-          { name: "file_path", label: "File Path", type: "string", optional: false },
-          { name: "file_type", label: "File Type", type: "string", optional: true, control_type: "select", pick_list: "file_types" },
-          { name: "extract_entities", label: "Extract Entities", type: "boolean", optional: true, default: true },
-          { name: "generate_summary", label: "Generate Summary", type: "boolean", optional: true, default: true }
+          { name: "document_content", label: "Document content", type: "string", optional: false, control_type: "text-area" },
+          { name: "file_path", label: "File path", type: "string", optional: false },
+          { name: "file_type", label: "File type", type: "string", optional: true, control_type: "select", pick_list: "file_types" },
+          { name: "extract_entities", label: "Extract entities", type: "boolean", optional: true, default: true },
+          { name: "generate_summary", label: "Generate summary", type: "boolean", optional: true, default: true }
         ]
       end,
 
@@ -535,6 +636,15 @@ require 'csv'
         ]
       end,
 
+      sample_output: lambda do
+        {
+          "document_id" => "abc123", "file_hash" => "…sha256…", "word_count" => 2500, "character_count" => 14000,
+          "estimated_tokens" => 3500, "language" => "english", "summary" => "…", "key_topics" => %w[rules r ag email],
+          "entities" => { "people" => [], "organizations" => [], "locations" => [] },
+          "created_at" => Time.now.iso8601, "processing_time_ms" => 12
+        }
+      end,
+
       execute: lambda do |_connection, input|
         call(:extract_metadata, input)
       end
@@ -547,15 +657,21 @@ require 'csv'
       title: "Check Document Changes",
       subtitle: "Detect changes in documents",
       description: "Compare document versions to detect modifications",
-      help: ->() {"Compares current and previous document versions using hash or content analysis to detect changes, quantify differences, and determine if reindexing is needed."},
+      help: lambda do
+        {
+          body: "Choose Hash only (fast), Content diff (line‑based), or Smart diff (tokens + structure).",
+          learn_more_url: "https://docs.workato.com/developing-connectors/sdk/sdk-reference/actions.html",
+          learn_more_text: "Action anatomy"
+        }
+      end,
 
       input_fields: lambda do
         [
-          { name: "current_hash", label: "Current Document Hash", type: "string", optional: false },
-          { name: "current_content", label: "Current Content", type: "string", optional: true, control_type: "text-area" },
-          { name: "previous_hash", label: "Previous Document Hash", type: "string", optional: false },
-          { name: "previous_content", label: "Previous Content", type: "string", optional: true, control_type: "text-area" },
-          { name: "check_type", label: "Check Type", type: "string", optional: true, default: "hash", control_type: "select", pick_list: "check_types" }
+          { name: "current_hash", label: "Current document hash", type: "string", optional: false },
+          { name: "current_content", label: "Current content", type: "string", optional: true, control_type: "text-area" },
+          { name: "previous_hash", label: "Previous document hash", type: "string", optional: false },
+          { name: "previous_content", label: "Previous content", type: "string", optional: true, control_type: "text-area" },
+          { name: "check_type", label: "Check type", type: "string", optional: true, default: "hash", control_type: "select", pick_list: "check_types" }
         ]
       end,
 
@@ -571,6 +687,15 @@ require 'csv'
         ]
       end,
 
+      sample_output: lambda do
+        {
+          "has_changed" => true, "change_type" => "content_changed", "change_percentage" => 12.5,
+          "added_content" => ["new line"], "removed_content" => ["old line"],
+          "modified_sections" => [{ "type" => "modified", "current_range" => [10,10], "previous_range" => [10,10], "current_lines" => ["A"], "previous_lines" => ["B"] }],
+          "requires_reindexing" => true
+        }
+      end,
+
       execute: lambda do |_connection, input|
         call(:detect_changes, input)
       end
@@ -582,18 +707,21 @@ require 'csv'
     calculate_metrics: {
       title: "Calculate Performance Metrics",
       subtitle: "Calculate system performance metrics",
-      description: "Calculate system performance metrics",
-      help: ->() {"Calculates performance metrics such as average, median, percentiles, trends, and anomaly detection from time-series data."},
+      description: "Calculate averages, percentiles, trend and anomalies from time‑series data",
+      help: lambda do
+        {
+          body: "Computes avg/median/min/max/stddev, P95/P99, simple trend and 2σ anomalies.",
+          learn_more_url: "https://docs.workato.com/developing-connectors/sdk/sdk-reference/object_definitions.html",
+          learn_more_text: "Reusable datapoint schema"
+        }
+      end,
 
       input_fields: lambda do |object_definitions|
         [
-          { name: "metric_type", label: "Metric Type", type: "string", optional: false, control_type: "select", pick_list: "metric_types" },
-          {
-            name: "data_points", label: "Data Points", list_mode_toggle: true,
-            type: "array", of: "object", optional: false, properties: object_definitions["metric_datapoint"]
-          },
-          { name: "aggregation_period", label: "Aggregation Period", type: "string", optional: true, default: "hour", control_type: "select", pick_list: "time_periods" },
-          { name: "include_percentiles", label: "Include Percentiles", type: "boolean", convert_input: "boolean_conversion", optional: true, default: true }
+          { name: "metric_type", label: "Metric type", type: "string", optional: false, control_type: "select", pick_list: "metric_types" },
+          { name: "data_points", label: "Data points", list_mode_toggle: true, type: "array", of: "object", optional: false, properties: object_definitions["metric_datapoint"] },
+          { name: "aggregation_period", label: "Aggregation period", type: "string", optional: true, default: "hour", control_type: "select", pick_list: "time_periods" },
+          { name: "include_percentiles", label: "Include percentiles", type: "boolean", convert_input: "boolean_conversion", optional: true, default: true }
         ]
       end,
 
@@ -608,8 +736,17 @@ require 'csv'
           { name: "percentile_99", type: "number" },
           { name: "total_count", type: "integer" },
           { name: "trend", type: "string" },
-          { name: "anomalies_detected", type: "array", of: "object", properties: object_definitions["anomaly"] },
+          { name: "anomalies_detected", type: "array", of: "object", properties: object_definitions["anomaly"] }
         ]
+      end,
+
+      sample_output: lambda do
+        {
+          "average" => 12.3, "median" => 11.8, "min" => 4.2, "max" => 60.0,
+          "std_deviation" => 5.1, "percentile_95" => 22.0, "percentile_99" => 29.5,
+          "total_count" => 1440, "trend" => "increasing",
+          "anomalies_detected" => [{ "timestamp" => Time.now.iso8601, "value" => 42.0 }]
+        }
       end,
 
       execute: lambda do |_connection, input|
@@ -623,28 +760,31 @@ require 'csv'
     optimize_batch_size: {
       title: "Optimize Batch Size",
       subtitle: "Calculate optimal batch size for processing",
-      description: "Determine optimal batch size based on performance data",
-      help: ->() {"Analyzes historical processing data to recommend an optimal batch size that balances throughput, latency, and resource usage."},
+      description: "Recommend an optimal batch size based on historical performance",
+      help: lambda do
+        {
+          body: "Heuristic scoring by target (throughput/latency/cost/accuracy).",
+          learn_more_url: "https://docs.workato.com/developing-connectors/sdk/guides/best-practices.html",
+          learn_more_text: "SDK best practices"
+        }
+      end,
 
       input_fields: lambda do
         [
-          { name: "total_items", label: "Total Items to Process", type: "integer", optional: false },
+          { name: "total_items", label: "Total items to process", type: "integer", optional: false },
           {
-            name: "processing_history",
-            label: "Processing History",
-            type: "array",
-            of: "object",
+            name: "processing_history", label: "Processing history",
+            type: "array", of: "object", optional: true,
             properties: [
               { name: "batch_size", type: "integer" },
               { name: "processing_time", type: "number" },
               { name: "success_rate", type: "number" },
               { name: "memory_usage", type: "number" }
-            ],
-            optional: true
+            ]
           },
-          { name: "optimization_target", label: "Optimization Target", type: "string", optional: true, default: "throughput", control_type: "select", pick_list: "optimization_targets" },
-          { name: "max_batch_size", label: "Maximum Batch Size", type: "integer", optional: true, default: 100 },
-          { name: "min_batch_size", label: "Minimum Batch Size", type: "integer", optional: true, default: 10 }
+          { name: "optimization_target", label: "Optimization target", type: "string", optional: true, default: "throughput", control_type: "select", pick_list: "optimization_targets" },
+          { name: "max_batch_size", label: "Maximum batch size", type: "integer", optional: true, default: 100 },
+          { name: "min_batch_size", label: "Minimum batch size", type: "integer", optional: true, default: 10 }
         ]
       end,
 
@@ -659,6 +799,13 @@ require 'csv'
         ]
       end,
 
+      sample_output: lambda do
+        {
+          "optimal_batch_size" => 50, "estimated_batches" => 20, "estimated_processing_time" => 120.5,
+          "throughput_estimate" => 41.5, "confidence_score" => 0.8, "recommendation_reason" => "Based on historical performance data"
+        }
+      end,
+
       execute: lambda do |_connection, input|
         call(:calculate_optimal_batch, input)
       end
@@ -670,8 +817,14 @@ require 'csv'
     evaluate_email_by_rules: {
       title: "Evaluate email against rules",
       subtitle: "Standard patterns or custom rules from Data Tables",
-      description: "Evaluate email against rules",
-      help: ->() {"Evaluates an email against predefined standard patterns or custom rules stored in Data Tables, returning whether a match was found and details of the matching rule."},
+      description: "Evaluate email and return best‑matching rule and action",
+      help: lambda do
+        {
+          body: "Use standard patterns or supply a Data Table of rules {rule_id, rule_type, rule_pattern, action, priority, active}. Requires API token to read Data Tables.",
+          learn_more_url: "https://docs.workato.com/workato-api/data-tables.html",
+          learn_more_text: "Developer API: Data tables"
+        }
+      end,
 
       config_fields: [
         {
@@ -710,15 +863,11 @@ require 'csv'
           }
         ]
 
-        # Surface the chosen table id back to the user as read-only context when relevant.
         if (config["rules_source"] || "standard").to_s == "custom"
           fields << {
-            name: "selected_rules_table_id",
-            label: "Selected rules table",
+            name: "selected_rules_table_id", label: "Selected rules table",
             type: "string", optional: true, sticky: true,
-            hint: "From configuration above.",
-            default: config["custom_rules_table_id"],
-            group: "Advanced"
+            hint: "From configuration above.", default: config["custom_rules_table_id"], group: "Advanced"
           }
         end
 
@@ -743,13 +892,24 @@ require 'csv'
         ]
       end,
 
+      sample_output: lambda do
+        {
+          "pattern_match" => true,
+          "rule_source" => "custom",
+          "selected_action" => "archive",
+          "top_match" => { "rule_id" => "R-1", "rule_type" => "subject", "rule_pattern" => "receipt", "action" => "archive", "priority" => 10, "field_matched" => "subject", "sample" => "Receipt #12345" },
+          "matches" => [],
+          "standard_signals" => { "sender_flags" => ["no[-_.]?reply"], "subject_flags" => ["\\breceipt\\b"], "body_flags" => [] },
+          "debug" => { "evaluated_rules_count" => 25, "schema_validated" => true, "errors" => [] }
+        }
+      end,
+
       execute: lambda do |connection, input, _eis, _eos, config|
-        # Pass config down; avoid reading mirrored inputs.
         call(:evaluate_email_by_rules_exec, connection, input, config)
       end
     }
   },
-  
+
   # ==========================================
   # METHODS (Helper Functions)
   # ==========================================
@@ -762,7 +922,7 @@ require 'csv'
       preserve_sentences  = !!input['preserve_sentences']
       preserve_paragraphs = !!input['preserve_paragraphs']
 
-      # ensure overlap < chunk_size and non-negative
+      chunk_size = 1 if chunk_size <= 0
       overlap = [[overlap, 0].max, [chunk_size - 1, 0].max].min
 
       # rough token->char estimate
@@ -789,7 +949,6 @@ require 'csv'
           chunk_end = position + rel_end if rel_end
         end
 
-        # guarantee forward progress
         chunk_end = [position + [chars_per_chunk, 1].max, text_len].min if chunk_end <= position
 
         chunk_text = text[position...chunk_end]
@@ -825,10 +984,8 @@ require 'csv'
       removed_sections = []
       extracted_urls = []
 
-      # normalize line endings
       cleaned.gsub!("\r\n", "\n")
 
-      # remove quoted lines (operate line-by-line; no multi-line greediness)
       if input['remove_quotes']
         lines = cleaned.lines
         quoted = lines.select { |l| l.lstrip.start_with?('>') }
@@ -837,7 +994,6 @@ require 'csv'
         cleaned = lines.join
       end
 
-      # bottom-up signature trim near the end
       if input['remove_signatures']
         lines = cleaned.lines
         sig_idx = lines.rindex { |l| l =~ /^\s*(--\s*$|Best regards,|Regards,|Sincerely,|Thanks,|Sent from my)/i }
@@ -847,7 +1003,6 @@ require 'csv'
         end
       end
 
-      # disclaimers: only if detected near the bottom
       if input['remove_disclaimers']
         lines = cleaned.lines
         disc_idx = lines.rindex { |l| l =~ /(This (e-)?mail|This message).*(confidential|intended only)/i }
@@ -857,19 +1012,16 @@ require 'csv'
         end
       end
 
-      # extract URLs (before whitespace normalization)
       if input['extract_urls']
         extracted_urls = cleaned.scan(%r{https?://[^\s<>"'()]+})
       end
 
-      # normalize whitespace but keep paragraph breaks reasonable
       if input['normalize_whitespace']
         cleaned.gsub!(/[ \t]+/, ' ')
         cleaned.gsub!(/\n{3,}/, "\n\n")
         cleaned.strip!
       end
 
-      # first non-empty paragraph as query (fallback to first 200 chars)
       extracted_query = cleaned.split(/\n{2,}/).find { |p| p.strip.length.positive? } || cleaned[0, 200].to_s
 
       {
@@ -888,7 +1040,8 @@ require 'csv'
 
       a = call(:util_coerce_numeric_vector, input['vector_a'])
       b = call(:util_coerce_numeric_vector, input['vector_b'])
-      raise 'Vectors must be the same length.' unless a.length == b.length
+      error('Vectors must be the same length.') unless a.length == b.length
+      error('Vectors cannot be empty') if a.empty?
 
       normalize = input.key?('normalize') ? !!input['normalize'] : true
       type      = (input['similarity_type'] || 'cosine').to_s
@@ -904,29 +1057,32 @@ require 'csv'
       mag_a = Math.sqrt(a.sum { |x| x * x })
       mag_b = Math.sqrt(b.sum { |x| x * x })
 
-      score = case type
-              when 'cosine'
-                (mag_a > 0 && mag_b > 0) ? dot / (mag_a * mag_b) : 0.0
-              when 'euclidean'
-                dist = Math.sqrt(a.zip(b).sum { |x, y| (x - y)**2 })
-                1.0 / (1.0 + dist)
-              when 'dot_product'
-                dot
-              else
-                (mag_a > 0 && mag_b > 0) ? dot / (mag_a * mag_b) : 0.0
-              end
+      score =
+        case type
+        when 'cosine'
+          (mag_a > 0 && mag_b > 0) ? dot / (mag_a * mag_b) : 0.0
+        when 'euclidean'
+          dist = Math.sqrt(a.zip(b).sum { |x, y| (x - y)**2 })
+          1.0 / (1.0 + dist)
+        when 'dot_product'
+          dot
+        else
+          (mag_a > 0 && mag_b > 0) ? dot / (mag_a * mag_b) : 0.0
+        end
 
       percent = %w[cosine euclidean].include?(type) ? (score * 100).round(2) : nil
 
-      similar = case type
-                when 'cosine', 'euclidean' then score >= threshold
-                when 'dot_product'
-                  if normalize
-                    score >= threshold
-                  else
-                    error('For dot_product without normalization, provide an absolute threshold appropriate to your embedding scale.')
-                  end
-                end
+      similar =
+        case type
+        when 'cosine', 'euclidean'
+          score >= threshold
+        when 'dot_product'
+          if normalize
+            score >= threshold
+          else
+            error('For dot_product without normalization, provide an absolute threshold appropriate to your embedding scale.')
+          end
+        end
 
       {
         similarity_score: score.round(6),
@@ -993,9 +1149,8 @@ require 'csv'
       max_length = (input['max_context_length'] || 3000).to_i
       include_metadata = !!input['include_metadata']
       system_instructions = input['system_instructions'].to_s
-      template_content = input['template_content'].to_s # <- from table or inline
+      template_content = input['template_content'].to_s
 
-      # Order context by relevance and clamp to max length
       sorted_context = context_docs.sort_by { |doc| (doc['relevance_score'] || 0) }.reverse
 
       context_parts = []
@@ -1013,8 +1168,6 @@ require 'csv'
       end
       context_text = context_parts.join("\n\n---\n\n")
 
-      # 1) If explicit template content provided (table/inline), use it.
-      # 2) Else use a built-in skeleton that already contains placeholders.
       base =
         if template_content.strip.length.positive?
           template_content
@@ -1035,7 +1188,6 @@ require 'csv'
           end
         end
 
-      # Replace placeholders; if none are present, append the default footer
       compiled = base.dup
       compiled.gsub!(/{{\s*context\s*}}/i, context_text)
       compiled.gsub!(/{{\s*query\s*}}/i,   query)
@@ -1161,7 +1313,6 @@ require 'csv'
       previous_content = input['previous_content']
       check_type       = (input['check_type'] || 'hash').to_s
 
-      # SMART mode: compute token-level change and structured diff regardless of hash equality
       if check_type == 'smart' && current_content && previous_content
         diff = call(:util_diff_lines, current_content.to_s, previous_content.to_s)
 
@@ -1336,7 +1487,7 @@ require 'csv'
         begin
           Float(x)
         rescue
-          raise 'Vectors must contain only numerics.'
+          error 'Vectors must contain only numerics.'
         end
       end
     end,
@@ -1364,31 +1515,15 @@ require 'csv'
         if idx_in_cur
           block = cur[i...idx_in_cur]
           added.concat(block)
-          modified_sections << {
-            type: 'added',
-            current_range: [i, idx_in_cur - 1],
-            previous_range: [j - 1, j - 1],
-            current_lines: block
-          }
+          modified_sections << { type: 'added', current_range: [i, idx_in_cur - 1], previous_range: [j - 1, j - 1], current_lines: block }
           i = idx_in_cur
         elsif idx_in_prev
           block = prev[j...idx_in_prev]
           removed.concat(block)
-          modified_sections << {
-            type: 'removed',
-            current_range: [i - 1, i - 1],
-            previous_range: [j, idx_in_prev - 1],
-            previous_lines: block
-          }
+          modified_sections << { type: 'removed', current_range: [i - 1, i - 1], previous_range: [j, idx_in_prev - 1], previous_lines: block }
           j = idx_in_prev
         else
-          modified_sections << {
-            type: 'modified',
-            current_range: [i, i],
-            previous_range: [j, j],
-            current_lines: [cur[i]],
-            previous_lines: [prev[j]]
-          }
+          modified_sections << { type: 'modified', current_range: [i, i], previous_range: [j, j], current_lines: [cur[i]], previous_lines: [prev[j]] }
           added << cur[i]
           removed << prev[j]
           i += 1
@@ -1399,32 +1534,17 @@ require 'csv'
       if i < cur.length
         block = cur[i..-1]
         added.concat(block)
-        modified_sections << {
-          type: 'added',
-          current_range: [i, cur.length - 1],
-          previous_range: [j - 1, j - 1],
-          current_lines: block
-        }
+        modified_sections << { type: 'added', current_range: [i, cur.length - 1], previous_range: [j - 1, j - 1], current_lines: block }
       elsif j < prev.length
         block = prev[j..-1]
         removed.concat(block)
-        modified_sections << {
-          type: 'removed',
-          current_range: [i - 1, i - 1],
-          previous_range: [j, prev.length - 1],
-          previous_lines: block
-        }
+        modified_sections << { type: 'removed', current_range: [i - 1, i - 1], previous_range: [j, prev.length - 1], previous_lines: block }
       end
 
       total_lines = [cur.length, prev.length].max
       line_change_percentage = total_lines.zero? ? 0.0 : (((added.length + removed.length).to_f / total_lines) * 100).round(2)
 
-      {
-        added: added,
-        removed: removed,
-        modified_sections: modified_sections,
-        line_change_percentage: line_change_percentage
-      }
+      { added: added, removed: removed, modified_sections: modified_sections, line_change_percentage: line_change_percentage }
     end,
 
     # ---------- HTTP helpers & endpoints ----------
@@ -1437,9 +1557,6 @@ require 'csv'
       "https://data-tables.workato.com"
     end,
 
-    # In some SDK contexts (e.g., picklists rendered during configuration), a Ruby
-    # block isn't forwarded through call. Accepting an explicit operation Proc makes
-    # the invocation reliable in all contexts.
     execute_with_retry: lambda do |connection, operation = nil, &block|
       retries     = 0
       max_retries = 3
@@ -1485,44 +1602,32 @@ require 'csv'
     end,
 
     pick_tables: lambda do |connection|
-      base = call(:devapi_base, connection)
-      resp = call(
-        :execute_with_retry,
-        connection,
-        lambda { get("#{base}/api/data_tables").params(page: 1, per_page: 100) }
-      )
-
+      # Use relative path against base_uri; pass params hash per docs
+      resp = call(:execute_with_retry, connection, lambda { get('/api/data_tables', page: 1, per_page: 100) })
       arr = resp.is_a?(Array) ? resp : (resp['data'] || [])
       arr.map { |t| [t['name'] || t['id'].to_s, t['id']] }
-      rescue RestClient::ExceptionWithResponse => e
-        hdrs = e.response&.headers || {}
-        cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
-        msg  = e.response&.body || e.message
-        hint = "Check API token and Developer API host (#{connection['developer_api_host'] || 'www'})."
-        error("Failed to load tables (#{e.http_code}) cid=#{cid} #{hint} #{msg}")
-      end,
-
-    devapi_get_table: lambda do |connection, table_id|
-      base = call(:devapi_base, connection)
-      call(:execute_with_retry, connection, lambda { get("#{base}/api/data_tables/#{table_id}") })
+    rescue RestClient::ExceptionWithResponse => e
+      hdrs = e.response&.headers || {}
+      cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
+      msg  = e.response&.body || e.message
+      hint = "Check API token and Developer API host (#{connection['developer_api_host'] || 'www'})."
+      error("Failed to load tables (#{e.http_code}) cid=#{cid} #{hint} #{msg}")
     end,
 
-    # Validate schema has all required field names
+    devapi_get_table: lambda do |connection, table_id|
+      call(:execute_with_retry, connection, lambda { get("/api/data_tables/#{table_id}") })
+    end,
+
     validate_rules_schema!: lambda do |_connection, schema, required_names|
       names = Array(schema).map { |c| (c['name'] || '').to_s }
       missing = required_names.reject { |n| names.include?(n) }
       error("Rules table missing required fields: #{missing.join(', ')}") unless missing.empty?
     end,
 
-    # Build map: field_name -> field_id for quick document resolution
     schema_field_id_map: lambda do |_connection, schema|
-      Hash[
-        Array(schema).map { |c| [ (c['name'] || '').to_s, (c['field_id'] || c['id'] || '').to_s ] }
-      ]
+      Hash[ Array(schema).map { |c| [ (c['name'] || '').to_s, (c['field_id'] || c['id'] || '').to_s ] } ]
     end,
 
-    # Query all active rules (Data Tables v1, paged)
-    # Accepts optional schema to avoid an extra metadata call.
     dt_query_rules_all: lambda do |connection, table_id, required_fields, max_rules, schema = nil|
       base = call(:dt_records_base, connection)
       url  = "#{base}/api/v1/tables/#{table_id}/query"
@@ -1541,7 +1646,7 @@ require 'csv'
       cont = nil
       loop do
         body  = { select: select_fields, where: where, order: order, limit: 200, continuation_token: cont }.compact
-        resp = call(:execute_with_retry, connection, lambda { post(url).payload(body) })
+        resp  = call(:execute_with_retry, connection, lambda { post(url).payload(body) })
         recs  = resp['records'] || resp['data'] || []
         records.concat(recs)
         cont = resp['continuation_token']
@@ -1590,11 +1695,6 @@ require 'csv'
       default.to_i
     end,
 
-    # Compile a safe regex from user pattern.
-    # Supports:
-    #  - /.../ style → treated as regex
-    #  - re:...      → treated as regex
-    #  - otherwise   → case-insensitive substring (escaped)
     safe_regex: lambda do |_connection, pattern|
       p = pattern.to_s.strip
       max_len = 512
@@ -1621,35 +1721,14 @@ require 'csv'
       }
     end,
 
-    # Built-in standard patterns (conservative defaults)
     evaluate_standard_patterns: lambda do |_connection, email|
       from = "#{email[:from_name]} <#{email[:from_email]}>"
       subj = email[:subject].to_s
       body = email[:body].to_s
 
-      sender_rx = [
-        /\bno[-_.]?reply\b/i,
-        /\bdo[-_.]?not[-_.]?reply\b/i,
-        /\bdonotreply\b/i,
-        /\bnewsletter\b/i,
-        /\bmailer\b/i,
-        /\bautomated\b/i
-      ]
-      subject_rx = [
-        /\border\s*(no\.|#)?\s*\d+/i,
-        /\b(order|purchase)\s+confirmation\b/i,
-        /\bconfirmation\b/i,
-        /\breceipt\b/i,
-        /\binvoice\b/i,
-        /\b(password\s*reset|verification\s*code|two[-\s]?factor)\b/i
-      ]
-      body_rx = [
-        /\bunsubscribe\b/i,
-        /\bmanage (your )?preferences\b/i,
-        /\bautomated (message|email)\b/i,
-        /\bdo not reply\b/i,
-        /\bview (this|in) browser\b/i
-      ]
+      sender_rx = [ /\bno[-_.]?reply\b/i, /\bdo[-_.]?not[-_.]?reply\b/i, /\bdonotreply\b/i, /\bnewsletter\b/i, /\bmailer\b/i, /\bautomated\b/i ]
+      subject_rx = [ /\border\s*(no\.|#)?\s*\d+/i, /\b(order|purchase)\s+confirmation\b/i, /\bconfirmation\b/i, /\breceipt\b/i, /\binvoice\b/i, /\b(password\s*reset|verification\s*code|two[-\s]?factor)\b/i ]
+      body_rx = [ /\bunsubscribe\b/i, /\bmanage (your )?preferences\b/i, /\bautomated (message|email)\b/i, /\bdo not reply\b/i, /\bview (this|in) browser\b/i ]
 
       matches = []
       flags_sender  = sender_rx.select { |rx| from.match?(rx) }.map(&:source)
@@ -1658,25 +1737,20 @@ require 'csv'
 
       flags_sender.each do |src|
         m = from.match(Regexp.new(src, Regexp::IGNORECASE))
-        matches << { rule_id: "std:sender:#{src}", rule_type: "sender", rule_pattern: src,
-                    action: nil, priority: 1000, field_matched: "sender", sample: m&.to_s }
+        matches << { rule_id: "std:sender:#{src}", rule_type: "sender", rule_pattern: src, action: nil, priority: 1000, field_matched: "sender", sample: m&.to_s }
       end
       flags_subject.each do |src|
         m = subj.match(Regexp.new(src, Regexp::IGNORECASE))
-        matches << { rule_id: "std:subject:#{src}", rule_type: "subject", rule_pattern: src,
-                    action: nil, priority: 1000, field_matched: "subject", sample: m&.to_s }
+        matches << { rule_id: "std:subject:#{src}", rule_type: "subject", rule_pattern: src, action: nil, priority: 1000, field_matched: "subject", sample: m&.to_s }
       end
       flags_body.each do |src|
         m = body.match(Regexp.new(src, Regexp::IGNORECASE))
-        matches << { rule_id: "std:body:#{src}", rule_type: "body", rule_pattern: src,
-                    action: nil, priority: 1000, field_matched: "body", sample: m&.to_s }
+        matches << { rule_id: "std:body:#{src}", rule_type: "body", rule_pattern: src, action: nil, priority: 1000, field_matched: "body", sample: m&.to_s }
       end
 
       { matches: matches, sender_flags: flags_sender, subject_flags: flags_subject, body_flags: flags_body }
     end,
 
-    # Apply custom rules to an email. Each rule is a hash with normalized fields.
-    # Returns: { matches: [...], evaluated_count: <int> }
     apply_rules_to_email: lambda do |connection, email, rules, stop_on_first|
       from    = "#{email[:from_name]} <#{email[:from_email]}>"
       subject = email[:subject].to_s
@@ -1708,30 +1782,17 @@ require 'csv'
         evaluated += 1
         m = haystack.match(rx)
         if m
-          out << {
-            rule_id:       r['rule_id'],
-            rule_type:     rt,
-            rule_pattern:  pattern,
-            action:        r['action'],
-            priority:      r['priority'],
-            field_matched: field,
-            sample:        m.to_s
-          }
+          out << { rule_id: r['rule_id'], rule_type: rt, rule_pattern: pattern, action: r['action'], priority: r['priority'], field_matched: field, sample: m.to_s }
           break if stop_on_first
         end
       end
 
-      { matches: out.sort_by { |h| [h[:priority] || 1000, h[:rule_id].to_s] },
-        evaluated_count: evaluated }
+      { matches: out.sort_by { |h| [h[:priority] || 1000, h[:rule_id].to_s] }, evaluated_count: evaluated }
     end,
 
-    # Orchestrates evaluation against custom rules (Data Tables) and/or standard patterns.
-    # Inputs: connection, input hash from action, config_fields hash
-    # Outputs: hash matching action's output_fields
     evaluate_email_by_rules_exec: lambda do |connection, input, config|
       email = call(:normalize_email, connection, input['email'] || {})
 
-      # Prefer config_fields; fall back to inputs only for backward compatibility.
       source   = (config && config['rules_source'] || input['rules_source'] || 'standard').to_s
       table_id = (config && config['custom_rules_table_id'] || input['custom_rules_table_id']).to_s.presence
 
@@ -1744,21 +1805,18 @@ require 'csv'
       matches         = []
       evaluated_count = 0
 
-      # Compute standard pattern signals once
       std = call(:evaluate_standard_patterns, connection, email)
 
       if source == 'custom'
         error('api_token is required in connector connection to read custom rules from Data Tables') unless connection['api_token'].present?
-        call(:validate_table_id, table_id) # if table_id.blank? << removed, we want to validate both blank and malformed UUIDs.
+        call(:validate_table_id, table_id)
 
-        # Fetch schema once & validate required columns
         table_info = call(:devapi_get_table, connection, table_id)
         schema     = table_info['schema'] || table_info.dig('data', 'schema') || []
 
         required   = %w[rule_id rule_type rule_pattern action priority active]
         call(:validate_rules_schema!, connection, schema, required)
 
-        # Pull active rules; honor cap
         rules     = call(:dt_query_rules_all, connection, table_id, required, max_rules, schema)
         applied   = call(:apply_rules_to_email, connection, email, rules, stop_on)
         matches   = applied[:matches]
@@ -1772,7 +1830,6 @@ require 'csv'
           matches     = std[:matches]
         end
       else
-        # source == 'standard'
         matches     = std[:matches]
         used_source = matches.any? ? 'standard' : 'none'
       end
@@ -1797,8 +1854,6 @@ require 'csv'
     end,
 
     # ----- Templates (Data Tables) -----
-
-    # Build a dropdown from a templates table
     pick_templates_from_table: lambda do |connection, config|
       error('api_token is required in connector connection to read templates from Data Tables') unless connection['api_token'].present?
 
@@ -1809,7 +1864,6 @@ require 'csv'
       valuef   = (config['template_value_field']    || '').to_s
       contentf = (config['template_content_field']  || 'content').to_s
 
-      # Load schema once, validate columns
       table_info = call(:devapi_get_table, connection, table_id)
       schema     = table_info['schema'] || table_info.dig('data', 'schema') || []
       names      = Array(schema).map { |c| (c['name'] || '').to_s }
@@ -1835,7 +1889,6 @@ require 'csv'
         break if cont.blank? || records.length >= 2000
       end
 
-      # Decode rows to name/value pairs
       name_to_uuid = call(:schema_field_id_map, connection, schema)
       rows = records.map do |r|
         doc = r['document'] || []
@@ -1863,7 +1916,6 @@ require 'csv'
       error("Failed to load templates (#{e.http_code}) cid=#{cid} #{msg}")
     end,
 
-    # Resolve a selected value (record id or value-field) to its content/display
     resolve_template_selection: lambda do |connection, config, selected_value|
       table_id   = (config['templates_table_id'] || '').to_s
       valuef     = (config['template_value_field']   || '').to_s
@@ -1876,9 +1928,7 @@ require 'csv'
       base = call(:dt_records_base, connection)
 
       if valuef.present?
-        body = { select: [valuef, displayf, contentf, '$record_id'].uniq,
-                where:  { valuef => { '$eq' => selected_value } },
-                limit:  1 }
+        body = { select: [valuef, displayf, contentf, '$record_id'].uniq, where: { valuef => { '$eq' => selected_value } }, limit: 1 }
         resp = call(:execute_with_retry, connection, lambda { post("#{base}/api/v1/tables/#{table_id}/query").payload(body) })
         rec  = (resp['records'] || resp['data'] || [])[0]
         return nil unless rec
@@ -1891,7 +1941,6 @@ require 'csv'
       end
     end,
 
-    # Decode a record/document to name->value map using schema
     dt_decode_record_doc: lambda do |connection, schema, record|
       name_to_uuid = call(:schema_field_id_map, connection, schema)
       doc = record['document'] || []
@@ -1906,14 +1955,12 @@ require 'csv'
       row['$updated_at'] = record['updated_at'] if record['updated_at']
       row
     end
-
   },
-  
+
   # ==========================================
   # OBJECT DEFINITIONS (Schemas)
   # ==========================================
   object_definitions: {
-
     chunk_object: {
       fields: lambda do
         [
@@ -2039,8 +2086,7 @@ require 'csv'
         [
           { name: "batch_id", type: "string" },
           { name: "batch_number", type: "integer" },
-          { name: "datapoints", type: "array", of: "object",
-            properties: object_definitions["vertex_datapoint"] },
+          { name: "datapoints", type: "array", of: "object", properties: object_definitions["vertex_datapoint"] },
           { name: "size", type: "integer" }
         ]
       end
@@ -2049,18 +2095,10 @@ require 'csv'
     chunking_config: {
       fields: lambda do
         [
-          { name: "chunk_size", label: "Chunk Size (tokens)", type: "integer",
-            default: 1000, convert_input: "integer_conversion", sticky: true,
-            hint: "Maximum tokens per chunk" },
-          { name: "chunk_overlap", label: "Chunk Overlap (tokens)", type: "integer",
-            default: 100, convert_input: "integer_conversion", sticky: true,
-            hint: "Token overlap between chunks" },
-          { name: "preserve_sentences", label: "Preserve Sentences", type: "boolean",
-            default: true, convert_input: "boolean_conversion", sticky: true,
-            hint: "Don't break mid-sentence" },
-          { name: "preserve_paragraphs", label: "Preserve Paragraphs", type: "boolean",
-            default: false, convert_input: "boolean_conversion", sticky: true,
-            hint: "Try to keep paragraphs intact" }
+          { name: "chunk_size", label: "Chunk size (tokens)", type: "integer", default: 1000, convert_input: "integer_conversion", sticky: true, hint: "Maximum tokens per chunk" },
+          { name: "chunk_overlap", label: "Chunk overlap (tokens)", type: "integer", default: 100, convert_input: "integer_conversion", sticky: true, hint: "Token overlap between chunks" },
+          { name: "preserve_sentences", label: "Preserve sentences", type: "boolean", default: true, convert_input: "boolean_conversion", sticky: true, hint: "Don't break mid‑sentence" },
+          { name: "preserve_paragraphs", label: "Preserve paragraphs", type: "boolean", default: false, convert_input: "boolean_conversion", sticky: true, hint: "Try to keep paragraphs intact" }
         ]
       end
     },
@@ -2068,8 +2106,7 @@ require 'csv'
     chunking_result: {
       fields: lambda do |connection, _config, object_definitions|
         [
-          { name: "chunks", type: "array", of: "object",
-            properties: object_definitions["chunk_object"] },
+          { name: "chunks", type: "array", of: "object", properties: object_definitions["chunk_object"] },
           { name: "total_chunks", type: "integer" },
           { name: "total_tokens", type: "integer" }
         ]
@@ -2079,10 +2116,10 @@ require 'csv'
     email_cleaning_options: {
       fields: lambda do
         [
-          { name: "remove_signatures",  label: "Remove Signatures",     type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
-          { name: "remove_quotes",      label: "Remove Quoted Text",    type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
-          { name: "remove_disclaimers", label: "Remove Disclaimers",    type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
-          { name: "normalize_whitespace", label: "Normalize Whitespace", type: "boolean", default: true, convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "remove_signatures",  label: "Remove signatures",     type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "remove_quotes",      label: "Remove quoted text",    type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "remove_disclaimers", label: "Remove disclaimers",    type: "boolean", default: true,  convert_input: "boolean_conversion", sticky: true, group: "Options" },
+          { name: "normalize_whitespace", label: "Normalize whitespace", type: "boolean", default: true, convert_input: "boolean_conversion", sticky: true, group: "Options" },
           { name: "extract_urls",       label: "Extract URLs",          type: "boolean", default: false, convert_input: "boolean_conversion", sticky: true, group: "Options" }
         ]
       end
@@ -2105,55 +2142,18 @@ require 'csv'
     similarity_result: {
       fields: lambda do
         [
-          { 
-            name: "similarity_score", 
-            type: "number", 
-            label: "Similarity Score",
-            hint: "Raw similarity score (0-1 for cosine/euclidean, unbounded for dot product)"
-          },
-          { 
-            name: "similarity_percentage", 
-            type: "number", 
-            label: "Similarity Percentage",
-            hint: "Percentage representation of similarity (0-100), only for cosine/euclidean"
-          },
-          { 
-            name: "is_similar", 
-            type: "boolean",
-            label: "Is Similar",
-            hint: "Whether the vectors meet the similarity threshold"
-          },
-          { 
-            name: "similarity_type", 
-            type: "string",
-            label: "Similarity Type",
-            hint: "Method used for calculation (cosine, euclidean, or dot_product)"
-          },
-          { 
-            name: "computation_time_ms", 
-            type: "integer",
-            label: "Computation Time (ms)",
-            hint: "Time taken to compute similarity in milliseconds"
-          },
-          {
-            name: "threshold_used",
-            type: "number",
-            label: "Threshold Used",
-            hint: "Similarity threshold applied for is_similar determination",
-            optional: true
-          },
-          {
-            name: "vectors_normalized",
-            type: "boolean",
-            label: "Vectors Normalized",
-            hint: "Whether vectors were normalized before calculation",
-            optional: true
-          }
+          { name: "similarity_score", type: "number", label: "Similarity score", hint: "0–1 for cosine/euclidean; unbounded for dot product" },
+          { name: "similarity_percentage", type: "number", label: "Similarity percentage", hint: "0–100; only for cosine/euclidean" },
+          { name: "is_similar", type: "boolean", label: "Is similar", hint: "Whether the vectors meet the threshold" },
+          { name: "similarity_type", type: "string", label: "Similarity type", hint: "cosine, euclidean, or dot_product" },
+          { name: "computation_time_ms", type: "integer", label: "Computation time (ms)" },
+          { name: "threshold_used", type: "number", label: "Threshold used", optional: true },
+          { name: "vectors_normalized", type: "boolean", label: "Vectors normalized", optional: true }
         ]
       end
     }
   },
-  
+
   # ==========================================
   # PICK LISTS (Dropdown Options)
   # ==========================================
@@ -2169,9 +2169,9 @@ require 'csv'
 
     similarity_types: lambda do
       [
-        ["Cosine Similarity", "cosine"],
-        ["Euclidean Distance", "euclidean"],
-        ["Dot Product", "dot_product"]
+        ["Cosine similarity", "cosine"],
+        ["Euclidean distance", "euclidean"],
+        ["Dot product", "dot_product"]
       ]
     end,
 
@@ -2195,7 +2195,6 @@ require 'csv'
           return [[ "Configure API token and Templates table in action config", nil ]]
         end
 
-        # Reuse your existing method; feed it the needed fields
         cfg = {
           'templates_table_id'      => templates_table_id,
           'template_display_field'  => template_display_field,
@@ -2205,57 +2204,47 @@ require 'csv'
         call(:pick_templates_from_table, connection, cfg)
       else
         [
-          ["Standard RAG",        "standard"],
-          ["Customer Service",    "customer_service"],
-          ["Technical Support",   "technical"],
-          ["Sales Inquiry",       "sales"]
+          ["Standard RAG",      "standard"],
+          ["Customer service",  "customer_service"],
+          ["Technical support", "technical"],
+          ["Sales inquiry",     "sales"]
         ]
       end
     end,
 
     file_types: lambda do
       [
-        ["PDF", "pdf"],
-        ["Word Document", "docx"],
-        ["Text File", "txt"],
-        ["Markdown", "md"],
-        ["HTML", "html"]
+        ["PDF", "pdf"], ["Word Document", "docx"], ["Text File", "txt"], ["Markdown", "md"], ["HTML", "html"]
       ]
     end,
 
     check_types: lambda do
       [
-        ["Hash Only", "hash"],
-        ["Content Diff", "content"],
-        ["Smart Diff", "smart"]
+        ["Hash only", "hash"],
+        ["Content diff", "content"],
+        ["Smart diff", "smart"]
       ]
     end,
 
     metric_types: lambda do
       [
-        ["Response Time", "response_time"],
-        ["Token Usage", "token_usage"],
-        ["Cache Hit Rate", "cache_hit"],
-        ["Error Rate", "error_rate"],
+        ["Response time", "response_time"],
+        ["Token usage", "token_usage"],
+        ["Cache hit rate", "cache_hit"],
+        ["Error rate", "error_rate"],
         ["Throughput", "throughput"]
       ]
     end,
 
     time_periods: lambda do
       [
-        ["Minute", "minute"],
-        ["Hour", "hour"],
-        ["Day", "day"],
-        ["Week", "week"]
+        ["Minute", "minute"], ["Hour", "hour"], ["Day", "day"], ["Week", "week"]
       ]
     end,
 
     optimization_targets: lambda do
       [
-        ["Throughput", "throughput"],
-        ["Latency", "latency"],
-        ["Cost", "cost"],
-        ["Accuracy", "accuracy"]
+        ["Throughput", "throughput"], ["Latency", "latency"], ["Cost", "cost"], ["Accuracy", "accuracy"]
       ]
     end,
 
