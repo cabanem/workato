@@ -16,10 +16,10 @@ require 'csv'
       {
         name: "developer_api_host",
         label: "Workato region",
-        hint: "Only required when using Developer API/Data Tables. Defaults to EU. See data centers & base URLs.",
+        hint: "Only required when using custom rules from Data Tables. Defaults to EU. See Workato data centers.",
         optional: true,
         control_type: "select",
-        options: [
+        options: [ # <- use options (static) on connection
           ["US (www.workato.com)", "www"],
           ["EU (app.eu.workato.com)", "app.eu"],
           ["JP (app.jp.workato.com)", "app.jp"],
@@ -29,52 +29,55 @@ require 'csv'
           ["Developer sandbox (app.trial.workato.com)", "app.trial"]
         ],
         default: "app.eu",
+        group: "Developer API",
         sticky: true,
-        group: "Developer API (optional)"
+        support_pills: false
       },
       {
         name: "api_token",
         label: "API token (Bearer)",
-        hint: "Workspace admin → API clients → API keys. Must allow GET /api/users/me and Data tables if used.",
+        hint: "Workspace admin → API clients → API keys",
         control_type: "password",
         optional: true,
-        sticky: true,
-        group: "Developer API (optional)"
+        group: "Developer API",
+        sticky: true
       },
       {
         name: "environment",
         label: "Environment",
-        hint: "For your own labeling; not sent to APIs.",
+        hint: "Select the environment for the connector (for your own routing/labeling).",
         optional: false,
         control_type: "select",
-        pick_list: "environments",
-        default: "dev",
-        sticky: true
-      },
-      # Defaults to keep actions clean
-      {
-        name: "chunk_size_default", label: "Default chunk size (tokens)",
-        hint: "Used when Smart Chunk Text runs in 'Use Connection Defaults'.",
-        optional: true, default: 1000,
-        control_type: "number", type: "integer",
-        convert_input: "integer_conversion",
-        group: "Chunking defaults", sticky: true
+        options: [
+          ["Development", "development"],
+          ["Staging", "staging"],
+          ["Production", "production"]
+        ],
+        default: "development",
+        group: "Labeling",
+        sticky: true,
+        support_pills: false
       },
       {
-        name: "chunk_overlap_default", label: "Default chunk overlap (tokens)",
-        hint: "Used when Smart Chunk Text runs in 'Use Connection Defaults'.",
-        optional: true, default: 100,
-        control_type: "number", type: "integer",
-        convert_input: "integer_conversion",
-        group: "Chunking defaults", sticky: true
+        name: "chunk_size_default", label: "Default Chunk Size",
+        hint: "Default token size for text chunks",
+        optional: true, default: 1000, control_type: "number",
+        type: "integer", convert_input: "integer_conversion",
+        group: "RAG defaults"
       },
       {
-        name: "similarity_threshold", label: "Similarity threshold",
-        hint: "For cosine/euclidean: 0–1. For dot product: scale depends on embeddings; use custom per model.",
-        optional: true, default: 0.7,
-        type: "number", control_type: "number",
-        convert_input: "float_conversion",
-        group: "Similarity defaults", sticky: true
+        name: "chunk_overlap_default", label: "Default Chunk Overlap",
+        hint: "Default token overlap between chunks",
+        optional: true, default: 100, control_type: "number",
+        type: "integer", convert_input: "integer_conversion",
+        group: "RAG defaults"
+      },
+      {
+        name: "similarity_threshold", label: "Similarity Threshold",
+        hint: "Minimum similarity score (0-1) for cosine/euclidean; used as default gate.",
+        optional: true, type: "number", control_type: "number",
+        default: 0.7, convert_input: "float_conversion",
+        group: "Similarity defaults"
       }
     ],
 
@@ -82,14 +85,11 @@ require 'csv'
       type: "custom_auth",
       apply: lambda do |connection|
         if connection['api_token'].present?
-          headers(
-            'Authorization' => "Bearer #{connection['api_token']}",
-            'Accept'        => 'application/json'
-          )
+          headers('Authorization' => "Bearer #{connection['api_token']}",
+                  'Accept' => 'application/json')
         end
       end
     },
-
     base_uri: lambda do |connection|
       host = (connection['developer_api_host'].presence || 'app.eu').to_s
       "https://#{host}.workato.com"
