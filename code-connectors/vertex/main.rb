@@ -1158,6 +1158,26 @@
             { value: -0.04629135504364967 }
           ]
         }
+        when 'find_neighbors'
+          {
+            nearestNeighbors: [
+              {
+                id: 'query-1',
+                neighbors: [
+                  {
+                    datapoint: {
+                      datapointId: 'doc_001_chunk_1',
+                      featureVector: [0.1, 0.2, 0.3],
+                      crowdingTag: {
+                        crowdingAttribute: 'doc_001'
+                      }
+                    },
+                    distance: 0.95
+                  }
+                ]
+              }
+            ]
+          }
       end
     end,
     safety_ratings_output_sample: lambda do
