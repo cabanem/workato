@@ -1,0 +1,12 @@
+Primary
+
+- call vector index endpoint (:findNeighbors)
+- specify model for embed content
+
+-------------
+
+Secondary
+- use models specified in table as drop-down options
+    - do entries in table exist?
+    - are entries valid model?
+    - 
