@@ -18,3 +18,30 @@
 - `make help` - Show commands
 - `make test CONNECTOR=name` - Test connector
 - `docker-compose up -d` - Start test services
+
+# Devcontainer
+
+- Remove unused packages
+```bash
+sudo apt autoremove && sudo apt clean
+```
+
+- Clear npm cache
+```bash
+npm cache clean --force
+```
+
+- Remove old gems
+```bash
+gem cleanup
+```
+
+- Delete temporary files
+```bash
+rm -rf /tmp/*
+```
+
+- Prune Docker images/containers
+```bash
+docker system prune -af
+```
