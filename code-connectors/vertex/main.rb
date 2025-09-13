@@ -507,6 +507,56 @@
         call('sample_record_output', 'text_embedding')
       end
     },
+    find_neighbors: {
+      title: 'Find neighbors (Vector search)',
+      subtitle: 'Search for similar vectors using Vertex AI Vector Search',
+      description: "Find similar <span class='provider'>vectors</span> using " \
+                  "<span class='provider'>Google Vertex AI Vector Search</span>",
+      help: {
+        body: 'This action performs a nearest neighbor search to find vectors similar to ' \
+              'your query vector. This is commonly used for RAG systems, semantic search, ' \
+              'and recommendation systems.',
+        learn_more_url: 'https://cloud.google.com/vertex-ai/docs/vector-search/query-index',
+        learn_more_text: 'Learn more about Vector Search'
+      },
+
+      input_fields: lambda do |object_definitions|
+        object_definitions['find_neighbors_input']
+      end,
+
+      execute: lambda do |connection, input|
+        # Build the endpoint URL
+        endpoint_url = if input['index_endpoint_domain'].present?
+                        # Full domain provided (e.g., 123456.us-central1-123456.vdb.vertexai.goog)
+                        "https://#{input['index_endpoint_domain']}"
+                      else
+                        # Construct from parts
+                        "https://#{input['index_endpoint_numeric']}.#{connection['region']}-" \
+                        "#{input['index_endpoint_suffix']}.vdb.vertexai.goog"
+                      end
+        
+        # Build the full URL
+        url = "#{endpoint_url}/v1/projects/#{connection['project']}/locations/" \
+              "#{connection['region']}/indexEndpoints/#{input['index_endpoint_id']}:findNeighbors"
+        
+        # Prepare the payload
+        payload = call('payload_for_find_neighbors', input)
+        
+        # Make the request (using absolute URL since it's a different domain)
+        post(url, payload).
+          after_error_response(/.*/) do |_code, body, _header, message|
+            error("#{message}: #{body}")
+          end
+      end,
+
+      output_fields: lambda do |object_definitions|
+        object_definitions['find_neighbors_output']
+      end,
+
+      sample_output: lambda do
+        call('sample_record_output', 'find_neighbors')
+      end
+    },
     get_prediction: {
       title: 'Get prediction',
       subtitle: 'Get prediction in Google Vertex AI',
@@ -989,6 +1039,48 @@
             'content' => input['text']
           }.compact
         ]
+      }
+    end,
+    payload_for_find_neighbors: lambda do |input|
+      queries = [{
+        datapoint: {
+          datapointId: input['datapoint_id'],
+          featureVector: input['feature_vector']
+        }.compact,
+        neighborCount: input['neighbor_count'] || 10
+      }]
+      
+      # Add optional query parameters
+      if input['numeric_restricts'].present?
+        queries[0][:numericRestricts] = input['numeric_restricts'].map do |restrict|
+          {
+            name: restrict['name'],
+            op: restrict['op'],
+            valueFloat: restrict['value_float'],
+            valueInt: restrict['value_int']
+          }.compact
+        end
+      end
+      
+      if input['restricts'].present?
+        queries[0][:restricts] = input['restricts'].map do |restrict|
+          {
+            namespace: restrict['namespace'],
+            allowList: restrict['allow_list'],
+            denyList: restrict['deny_list']
+          }.compact
+        end
+      end
+      
+      if input['fraction_leaf_nodes_to_search_override'].present?
+        queries[0][:fractionLeafNodesToSearchOverride] = 
+          input['fraction_leaf_nodes_to_search_override']
+      end
+      
+      {
+        deployedIndexId: input['deployed_index_id'],
+        queries: queries,
+        returnFullDatapoint: input['return_full_datapoint'] || false
       }
     end,
     sample_record_output: lambda do |input|
@@ -1997,6 +2089,153 @@
             of: 'object',
             properties: [
               { name: 'value', type: 'number' }
+            ] }
+        ]
+      end
+    },
+    find_neighbors_input: {
+      fields: lambda do |_connection, _config_fields, _object_definitions|
+        [
+          { name: 'index_endpoint_domain',
+            label: 'Index endpoint domain',
+            hint: 'Full index endpoint domain (e.g., 123456.us-central1-789.vdb.vertexai.goog). ' \
+                  'Leave blank to construct from parts below.',
+            sticky: true },
+          { name: 'index_endpoint_numeric',
+            label: 'Index endpoint numeric prefix',
+            hint: 'The numeric prefix of your index endpoint (e.g., 123456789)',
+            ngIf: 'input.index_endpoint_domain.blank?',
+            sticky: true },
+          { name: 'index_endpoint_suffix',
+            label: 'Index endpoint suffix',
+            hint: 'The numeric suffix after region (e.g., 123456789)',
+            ngIf: 'input.index_endpoint_domain.blank?',
+            sticky: true },
+          { name: 'index_endpoint_id',
+            label: 'Index endpoint ID',
+            optional: false,
+            hint: 'The index endpoint ID (e.g., rag_email_index_endpoint)',
+            sticky: true },
+          { name: 'deployed_index_id',
+            label: 'Deployed index ID',
+            optional: false,
+            hint: 'The ID of the deployed index to search',
+            sticky: true },
+          { name: 'feature_vector',
+            label: 'Query vector',
+            type: 'array',
+            of: 'number',
+            optional: false,
+            hint: 'The vector to search for similar neighbors. Must match the dimension ' \
+                  'of your index.' },
+          { name: 'neighbor_count',
+            label: 'Number of neighbors',
+            type: 'integer',
+            control_type: 'integer',
+            convert_input: 'integer_conversion',
+            default: 10,
+            hint: 'Number of similar vectors to return (default: 10)' },
+          { name: 'datapoint_id',
+            label: 'Datapoint ID',
+            hint: 'Optional ID for the query datapoint for tracking purposes' },
+          { name: 'return_full_datapoint',
+            label: 'Return full datapoint',
+            type: 'boolean',
+            control_type: 'checkbox',
+            hint: 'Return complete datapoint information including restricts and metadata' },
+          { name: 'numeric_restricts',
+            label: 'Numeric restrictions',
+            type: 'array',
+            of: 'object',
+            hint: 'Filter results based on numeric metadata',
+            properties: [
+              { name: 'name', hint: 'Metadata field name' },
+              { name: 'value_float', type: 'number', label: 'Value (for exact match)' },
+              { name: 'value_int', type: 'integer', label: 'Value (for exact integer match)' },
+              { name: 'op',
+                control_type: 'select',
+                pick_list: [
+                  ['Less than', 'LESS'],
+                  ['Less than or equal', 'LESS_EQUAL'],
+                  ['Equal', 'EQUAL'],
+                  ['Greater than or equal', 'GREATER_EQUAL'],
+                  ['Greater than', 'GREATER'],
+                  ['Not equal', 'NOT_EQUAL']
+                ],
+                hint: 'Comparison operator' }
+            ] },
+          { name: 'restricts',
+            label: 'Token restrictions',
+            type: 'array',
+            of: 'object',
+            hint: 'Filter results based on token/tag metadata',
+            properties: [
+              { name: 'namespace', hint: 'Namespace for the restriction' },
+              { name: 'allow_list',
+                type: 'array',
+                of: 'string',
+                hint: 'List of allowed tokens' },
+              { name: 'deny_list',
+                type: 'array',
+                of: 'string',
+                hint: 'List of denied tokens' }
+            ] },
+          { name: 'fraction_leaf_nodes_to_search_override',
+            label: 'Fraction leaf nodes override',
+            type: 'number',
+            control_type: 'number',
+            convert_input: 'float_conversion',
+            hint: 'Override the fraction of leaf nodes to search (0.0 to 1.0). ' \
+                  'Higher values increase recall but reduce speed.' }
+        ]
+      end
+    },
+    find_neighbors_output: {
+      fields: lambda do |_connection, _config_fields, _object_definitions|
+        [
+          { name: 'nearestNeighbors',
+            type: 'array',
+            of: 'object',
+            properties: [
+              { name: 'id', label: 'Datapoint ID' },
+              { name: 'neighbors',
+                type: 'array',
+                of: 'object',
+                properties: [
+                  { name: 'datapoint',
+                    type: 'object',
+                    properties: [
+                      { name: 'datapointId', label: 'Datapoint ID' },
+                      { name: 'featureVector',
+                        type: 'array',
+                        of: 'number',
+                        label: 'Feature vector' },
+                      { name: 'restricts',
+                        type: 'array',
+                        of: 'object',
+                        properties: [
+                          { name: 'namespace' },
+                          { name: 'allowList', type: 'array', of: 'string' },
+                          { name: 'denyList', type: 'array', of: 'string' }
+                        ] },
+                      { name: 'numericRestricts',
+                        type: 'array',
+                        of: 'object',
+                        properties: [
+                          { name: 'namespace' },
+                          { name: 'valueInt', type: 'integer' },
+                          { name: 'valueFloat', type: 'number' },
+                          { name: 'op' }
+                        ] },
+                      { name: 'crowdingTag',
+                        type: 'object',
+                        properties: [
+                          { name: 'crowdingAttribute' }
+                        ] }
+                    ] },
+                  { name: 'distance', type: 'number' },
+                  { name: 'sparseDistance', type: 'number' }
+                ] }
             ] }
         ]
       end
