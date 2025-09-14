@@ -59,7 +59,20 @@
       { name: 'version',
         optional: false,
         default: 'v1',
-        hint: 'E.g. v1beta1' }
+        hint: 'E.g. v1beta1' },
+      { name: 'dynamic_models',
+        label: 'Refresh model list from API (Model Garden)',
+        type: 'boolean', control_type: 'checkbox', optional: true,
+        hint: 'Fetch available Gemini/Embedding models at runtime. Falls back to a curated static list on errors.' },
+      { name: 'include_preview_models',
+        label: 'Include preview/experimental models',
+        type: 'boolean', control_type: 'checkbox', optional: true, sticky: true,
+        hint: 'Also include Experimental/Private/Public Preview models. Leave unchecked for GA-only in production.' },
+      { name: 'validate_model_on_run',
+        label: 'Validate model before run',
+        type: 'boolean', control_type: 'checkbox', optional: true, sticky: true,
+        hint: 'Pre-flight check the chosen model and your project access before sending the request. Recommended.' }
+
     ],
     authorization: {
       type: 'multi',
@@ -222,6 +235,7 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        call('validate_publisher_model!', connection, input['model'])
         payload = call('payload_for_send_message', input)
         post("projects/#{connection['project']}/locations/#{connection['region']}" \
              "/#{input['model']}:generateContent", payload).
@@ -253,6 +267,7 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        call('validate_publisher_model!', connection, input['model'])
         payload = call('payload_for_translate', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
@@ -284,6 +299,7 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        call('validate_publisher_model!', connection, input['model'])
         payload = call('payload_for_summarize', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
@@ -317,6 +333,7 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        call('validate_publisher_model!', connection, input['model'])
         payload = call('payload_for_parse', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
@@ -353,6 +370,7 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        call('validate_publisher_model!', connection, input['model'])
         payload = call('payload_for_email', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
@@ -388,6 +406,7 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        call('validate_publisher_model!', connection, input['model'])
         payload = call('payload_for_categorize', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
@@ -424,6 +443,7 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        call('validate_publisher_model!', connection, input['model'])
         payload = call('payload_for_analyze', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
@@ -455,6 +475,7 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        call('validate_publisher_model!', connection, input['model'])
         payload = call('payload_for_analyze_image', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
@@ -490,6 +511,7 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        call('validate_publisher_model!', connection, input['model'])
         payload = call('payload_for_text_embedding', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:predict", payload).
@@ -1228,20 +1250,29 @@
     end,
     # --- Dynamic Model Discovery for Vertex AI (Model Garden/Publisher models) ---
     fetch_publisher_models: lambda do |connection, publisher = 'google'|
+      # Use the regional service endpoint; list is in v1beta1.
+      # Docs: publishers.models.list (v1beta1), supports 'view' and pagination.
+      # https://cloud.google.com/vertex-ai/docs/reference/rest/v1beta1/publishers.models/list
       region = connection['region'].presence || 'us-central1'
-      host = "https://#{region}-aiplatform.googleapis.com"
-      url  = "#{host}/v1beta1/publishers/#{publisher}/models"
+      host   = "https://#{region}-aiplatform.googleapis.com"
+      url    = "#{host}/v1beta1/publishers/#{publisher}/models"
 
       models = []
       page_token = nil
       begin
         loop do
-          resp = get(url).
-                params(page_size: 200, page_token: page_token).
-                after_error_response(/.*/) do |code, body, _hdrs, message|
-                  error("List publisher models failed (HTTP #{code}) - #{message}: #{body}")
-                end
-          models.concat(resp['models'] || [])
+          resp = get(url)
+                  .params(
+                    page_size: 200,
+                    page_token: page_token,
+                    view: 'PUBLISHER_MODEL_VIEW_FULL', # include launchStage/versionState, etc.
+                    list_all_versions: true
+                  )
+                  .after_error_response(/.*/) do |code, body, _hdrs, message|
+                    error("List publisher models failed (HTTP #{code}) - #{message}: #{body}")
+                  end
+
+          models.concat(resp['publisherModels'] || [])
           page_token = resp['nextPageToken']
           break if page_token.blank?
         end
@@ -1250,38 +1281,43 @@
         models = []
       end
 
-      # models[].name looks like "publishers/google/models/gemini-2.5-pro"
       models
     end,
     # Very light heuristics to partition models by capability.
-    # We prefer to under-include rather than over-include.
     vertex_model_bucket: lambda do |model_id|
       id = model_id.to_s.downcase
-      return :embedding if id.include?('embedding') || id.include?('gecko') || id.include?('embeddinggemma') || id.include?('multimodalembedding')
-      return :image     if id.include?('vision') || id.include?('imagegeneration')
-      return :tts       if id.include?('tts')
+      return :embedding if id.include?('embedding') || id.include?('gecko') || id.include?('multimodalembedding') || id.include?('embeddinggemma')
+      return :image     if id.include?('vision') || id.include?('imagegeneration') || id.include?('imagen')
+      return :tts       if id.include?('tts') || id.include?('audio')
       :text
     end,
     # Filter/sort + convert to picklist options [label, value]
-    to_model_options: lambda do |models, bucket:|
-      # Basic hygiene: prefer GA/Public Preview, drop ancient/broken identifiers if present
-      # When available, the v1 GET offers 'launchStage'/'versionState'; list(v1beta1) may not.
-      # We’ll rely on name heuristics and sort by “freshness-looking” ids.
-      ids = models.map { |m| m['name'].to_s.split('/').last }.compact.uniq
+    to_model_options: lambda do |models, bucket:, include_preview: false|
+      # Prefer GA and stable versions unless explicitly asked to include preview.
+      filtered = models.select do |m|
+        id = m['name'].to_s.split('/').last
+        next false if id.blank?
 
-      # Drop known-bad patterns
-      ids.reject! { |id| id =~ /(^|-)1\.0-|text-bison|chat-bison/ } # retired lines cause 404s. :contentReference[oaicite:2]{index=2}
+        # Drop retired lines that frequently 404
+        next false if id =~ /(^|-)1\.0-|text-bison|chat-bison/
 
-      # Bucket
-      ids = ids.select { |id| call('vertex_model_bucket', id) == bucket }
+        # Bucket by id heuristics
+        next false unless call('vertex_model_bucket', id) == bucket
 
-      # Format labels e.g. "gemini-2.5-pro" -> "Gemini 2.5 Pro"
-      options = ids.map do |id|
-        label = id.gsub('-', ' ').split.map { |t| t =~ /\d/ ? t : t.capitalize }.join(' ')
-        ["#{label}", "publishers/google/models/#{id}"]
+        # GA filter (launchStage lives on v1 PublisherModel too)
+        stage = (m['launchStage'] || '').to_s
+        include_preview || stage == 'GA' || stage.blank? # keep if GA or unknown when preview is off
       end
 
-      # Sort: put 2.5 > 2.0 > 1.5; Pro > Flash > Flash Lite; then lexicographic
+      # make ids unique by name
+      ids = filtered.map { |m| m['name'].to_s.split('/').last }.compact.uniq
+
+      options = ids.map do |id|
+        label = id.gsub('-', ' ').split.map { |t| t =~ /\d/ ? t : t.capitalize }.join(' ')
+        [label, "publishers/google/models/#{id}"]
+      end
+
+      # Sort: 2.5 > 2.0 > 1.5 ; Pro > Flash > Lite ; then lexicographic
       options.sort_by do |label, _|
         [
           (label[/\b2\.5\b/] ? 0 : label[/\b2\.0\b/] ? 1 : label[/\b1\.5\b/] ? 2 : 3),
@@ -1290,14 +1326,49 @@
         ]
       end
     end,
-    # High-level API used by pick_lists. Falls back to your static lists when list fails.
+    # High-level API used by pick_lists. Falls back to your static lists when listing is off or fails.
     dynamic_model_picklist: lambda do |connection, bucket, static_fallback|
+      # respect the toggle
+      unless connection['dynamic_models']
+        next static_fallback
+      end
+
       models = call('fetch_publisher_models', connection, 'google')
       if models.present?
-        call('to_model_options', models, bucket: bucket)
+        opts = call('to_model_options', models,
+                    bucket: bucket,
+                    include_preview: connection['include_preview_models'])
+        opts.presence || static_fallback
       else
-        static_fallback # keep UI usable if Google listing is down/forbidden
+        static_fallback
       end
+    end,
+    # Preflight validation for model before run (cheap + region-aware) ---
+    validate_publisher_model!: lambda do |connection, model_name|
+      return if model_name.blank?
+      return unless connection['validate_model_on_run']
+
+      region = connection['region'].presence || 'us-central1'
+      url = "https://#{region}-aiplatform.googleapis.com/v1/#{model_name}"
+
+      # Prefer v1 get (has launchStage); BASIC view is default; ask FULL to be safe.
+      # https://cloud.google.com/vertex-ai/docs/reference/rest/v1/publishers.models/get
+      resp = get(url)
+              .params(view: 'PUBLISHER_MODEL_VIEW_FULL')
+              .after_error_response(/.*/) do |code, body, _hdrs, message|
+                error("Model validation failed (HTTP #{code}) for #{model_name} in #{region}: #{message}: #{body}")
+              end
+
+      # Enforce GA unless preview is explicitly allowed
+      unless connection['include_preview_models']
+        stage = resp['launchStage'].to_s
+        if stage.present? && stage != 'GA'
+          error("Model '#{model_name}' is not GA (launchStage=#{stage}). " \
+                "Uncheck 'Validate model before run' or enable 'Include preview/experimental models'.")
+        end
+      end
+
+      true
     end
 
   },
@@ -2383,9 +2454,10 @@
       end
     }
   },
+
   pick_lists: {
-    available_text_models: lambda do
-      [
+    available_text_models: lambda do |connection|
+      static = [
         ['Gemini 1.0 Pro', 'publishers/google/models/gemini-pro'],
         ['Gemini 1.5 Pro', 'publishers/google/models/gemini-1.5-pro'],
         ['Gemini 1.5 Flash', 'publishers/google/models/gemini-1.5-flash'],
@@ -2397,8 +2469,8 @@
       ]
       call('dynamic_model_picklist', connection, :text, static)
     end,
-    available_image_models: lambda do
-      [
+    available_image_models: lambda do |connection|
+      static = [
         ['Gemini Pro Vision', 'publishers/google/models/gemini-pro-vision'],
         ['Gemini 1.5 Pro', 'publishers/google/models/gemini-1.5-pro'],
         ['Gemini 1.5 Flash', 'publishers/google/models/gemini-1.5-flash'],
@@ -2407,11 +2479,11 @@
         ['Gemini 2.5 Pro', 'publishers/google/models/gemini-2.5-pro'],
         ['Gemini 2.5 Flash', 'publishers/google/models/gemini-2.5-flash'],
         ['Gemini 2.5 Flash Lite', 'publishers/google/models/gemini-2.5-flash-lite']
-      ],
+      ]
       call('dynamic_model_picklist', connection, :image, static)
     end,
-    available_embedding_models: lambda do
-      [
+    available_embedding_models: lambda do |connection|
+      static = [
         ['Text embedding gecko-001', 'publishers/google/models/textembedding-gecko@001'],
         ['Text embedding gecko-003', 'publishers/google/models/textembedding-gecko@003'],
         ['Text embedding-004', 'publishers/google/models/text-embedding-004']
@@ -2479,4 +2551,5 @@
       ]
     end
   }
+  
 }
