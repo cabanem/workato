@@ -512,6 +512,9 @@
       subtitle: 'K-NN query on a deployed Vertex AI index endpoint',
       description: "Query a <span class='provider'>Vertex AI Vector Search</span> index endpoint "\
                   "to retrieve nearest neighbors.",
+      retry_on_request: ['POST'],
+      retry_on_response: [429, 500, 502, 503, 504],
+      max_retries: 3,
       help: {
         body: "This action queries a deployed Vector Search index endpoint to find nearest neighbors "\
               "(k-NN). IMPORTANT: Use the endpoint's own host (public endpoint domain or PSC DNS). "\
