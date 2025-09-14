@@ -1225,7 +1225,81 @@
           hash[element['name'].gsub(/^\d|\W/) { |c| "_ #{c.unpack('H*')}" }] = '<Sample Text>'
         end
       end || {}
+    end,
+    # --- Dynamic Model Discovery for Vertex AI (Model Garden/Publisher models) ---
+    fetch_publisher_models: lambda do |connection, publisher = 'google'|
+      region = connection['region'].presence || 'us-central1'
+      host = "https://#{region}-aiplatform.googleapis.com"
+      url  = "#{host}/v1beta1/publishers/#{publisher}/models"
+
+      models = []
+      page_token = nil
+      begin
+        loop do
+          resp = get(url).
+                params(page_size: 200, page_token: page_token).
+                after_error_response(/.*/) do |code, body, _hdrs, message|
+                  error("List publisher models failed (HTTP #{code}) - #{message}: #{body}")
+                end
+          models.concat(resp['models'] || [])
+          page_token = resp['nextPageToken']
+          break if page_token.blank?
+        end
+      rescue StandardError
+        # On any failure, return empty list and let caller choose fallback
+        models = []
+      end
+
+      # models[].name looks like "publishers/google/models/gemini-2.5-pro"
+      models
+    end,
+    # Very light heuristics to partition models by capability.
+    # We prefer to under-include rather than over-include.
+    vertex_model_bucket: lambda do |model_id|
+      id = model_id.to_s.downcase
+      return :embedding if id.include?('embedding') || id.include?('gecko') || id.include?('embeddinggemma') || id.include?('multimodalembedding')
+      return :image     if id.include?('vision') || id.include?('imagegeneration')
+      return :tts       if id.include?('tts')
+      :text
+    end,
+    # Filter/sort + convert to picklist options [label, value]
+    to_model_options: lambda do |models, bucket:|
+      # Basic hygiene: prefer GA/Public Preview, drop ancient/broken identifiers if present
+      # When available, the v1 GET offers 'launchStage'/'versionState'; list(v1beta1) may not.
+      # We’ll rely on name heuristics and sort by “freshness-looking” ids.
+      ids = models.map { |m| m['name'].to_s.split('/').last }.compact.uniq
+
+      # Drop known-bad patterns
+      ids.reject! { |id| id =~ /(^|-)1\.0-|text-bison|chat-bison/ } # retired lines cause 404s. :contentReference[oaicite:2]{index=2}
+
+      # Bucket
+      ids = ids.select { |id| call('vertex_model_bucket', id) == bucket }
+
+      # Format labels e.g. "gemini-2.5-pro" -> "Gemini 2.5 Pro"
+      options = ids.map do |id|
+        label = id.gsub('-', ' ').split.map { |t| t =~ /\d/ ? t : t.capitalize }.join(' ')
+        ["#{label}", "publishers/google/models/#{id}"]
+      end
+
+      # Sort: put 2.5 > 2.0 > 1.5; Pro > Flash > Flash Lite; then lexicographic
+      options.sort_by do |label, _|
+        [
+          (label[/\b2\.5\b/] ? 0 : label[/\b2\.0\b/] ? 1 : label[/\b1\.5\b/] ? 2 : 3),
+          (label[/\bPro\b/] ? 0 : label[/\bFlash\b/] ? 1 : label[/\bLite\b/] ? 2 : 3),
+          label
+        ]
+      end
+    end,
+    # High-level API used by pick_lists. Falls back to your static lists when list fails.
+    dynamic_model_picklist: lambda do |connection, bucket, static_fallback|
+      models = call('fetch_publisher_models', connection, 'google')
+      if models.present?
+        call('to_model_options', models, bucket: bucket)
+      else
+        static_fallback # keep UI usable if Google listing is down/forbidden
+      end
     end
+
   },
 
   object_definitions: {
@@ -2321,6 +2395,7 @@
         ['Gemini 2.5 Flash', 'publishers/google/models/gemini-2.5-flash'],
         ['Gemini 2.5 Flash Lite', 'publishers/google/models/gemini-2.5-flash-lite']
       ]
+      call('dynamic_model_picklist', connection, :text, static)
     end,
     available_image_models: lambda do
       [
@@ -2332,7 +2407,8 @@
         ['Gemini 2.5 Pro', 'publishers/google/models/gemini-2.5-pro'],
         ['Gemini 2.5 Flash', 'publishers/google/models/gemini-2.5-flash'],
         ['Gemini 2.5 Flash Lite', 'publishers/google/models/gemini-2.5-flash-lite']
-      ]
+      ],
+      call('dynamic_model_picklist', connection, :image, static)
     end,
     available_embedding_models: lambda do
       [
@@ -2340,6 +2416,7 @@
         ['Text embedding gecko-003', 'publishers/google/models/textembedding-gecko@003'],
         ['Text embedding-004', 'publishers/google/models/text-embedding-004']
       ]
+      call('dynamic_model_picklist', connection, :embedding, static)
     end,
     message_types: lambda do
       %w[single_message chat_transcript].map { |m| [m.humanize, m] }
