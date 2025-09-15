@@ -1,7 +1,13 @@
 Primary
 
+Email processing
 - call vector index endpoint (:findNeighbors)
 - specify model for embed content
+- classify the email against rules for business logic
+
+Knowledge base management
+- Index content
+- 
 
 -------------
 
