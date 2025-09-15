@@ -948,13 +948,177 @@ require 'csv'
       execute: lambda do |connection, input, _eis, _eos, config|
         call(:evaluate_email_by_rules_exec, connection, input, config)
       end
+    },
+  
+    adapt_chunks_for_vertex: {
+      title: "Adapt chunks for Vertex",
+      subtitle: "Map chunk objects → {id, text, metadata}",
+      description: "Generate stable IDs and merge base metadata.",
+      input_fields: lambda do |object_definitions|
+        [
+          { name: "chunks", type: "array", of: "object", list_mode_toggle: true, optional: false,
+            properties: object_definitions["chunk_object"] },
+          { name: "id_strategy", control_type: "select", default: "docid_index", sticky: true,
+            pick_list: [[ "Use chunk_id", "pass_through" ],
+                        [ "Prefix + index", "prefix_index" ],
+                        [ "Document ID/Hash + index", "docid_index" ]] },
+          { name: "id_prefix", hint: "Used when Prefix + index" },
+          { name: "document_id", hint: "Used when Document ID/Hash + index (e.g. from Generate document metadata)" },
+          { name: "base_metadata", type: "object", label: "Base metadata merged into each chunk" }
+        ]
+      end,
+      output_fields: lambda do
+        [
+          { name: "records", type: "array", of: "object", properties: [
+            { name: "id" }, { name: "text" }, { name: "metadata", type: "object" }
+          ]},
+          { name: "count", type: "integer" }
+        ]
+      end,
+      execute: lambda do |_connection, input|
+        chunks    = Array(input['chunks'])
+        strategy  = (input['id_strategy'] || 'docid_index').to_s
+        base_meta = input['base_metadata'] || {}
+
+        recs = chunks.each_with_index.map do |c, idx|
+          id =
+            case strategy
+            when 'pass_through' then (c['chunk_id'].presence || "chunk_#{idx}")
+            when 'prefix_index' then [input['id_prefix'], idx].compact.join('_')
+            else                      [input['document_id'], idx].compact.join('_')
+            end
+
+          meta = (c['metadata'] || {}).merge(base_meta)
+                  .merge('chunk_index' => c['chunk_index'], 'chunk_id' => (c['chunk_id'] || id))
+
+          { 'id' => id, 'text' => c['text'].to_s, 'metadata' => meta }
+        end
+
+        { 'records' => recs, 'count' => recs.length }
+      end
+    },
+    serialize_chunks_to_jsonl: {
+      title: "Serialize chunks (JSONL)",
+      subtitle: "Emit JSONL with id/text/metadata",
+      input_fields: lambda do |object_definitions|
+        [
+          { name: "chunks", type: "array", of: "object", list_mode_toggle: true, optional: false,
+            properties: object_definitions["chunk_object"] },
+          { name: "include_metadata", type: "boolean", control_type: "checkbox", default: true },
+          { name: "id_field_name", default: "id" },
+          { name: "id_strategy", control_type: "select", default: "docid_index", sticky: true,
+            pick_list: [[ "Use chunk_id", "pass_through" ],
+                        [ "Prefix + index", "prefix_index" ],
+                        [ "Document ID/Hash + index", "docid_index" ]] },
+          { name: "id_prefix" }, { name: "document_id" }
+        ]
+      end,
+      output_fields: lambda do
+        [ { name: "jsonl", type: "string" }, { name: "lines", type: "integer" } ]
+      end,
+      execute: lambda do |_connection, input|
+        chunks = Array(input['chunks'])
+        strat  = (input['id_strategy'] || 'docid_index').to_s
+        name   = (input['id_field_name'] || 'id').to_s
+
+        lines = chunks.each_with_index.map do |c, idx|
+          id =
+            case strat
+            when 'pass_through' then (c['chunk_id'].presence || "chunk_#{idx}")
+            when 'prefix_index' then [input['id_prefix'], idx].compact.join('_')
+            else                      [input['document_id'], idx].compact.join('_')
+            end
+          row = { name => id, 'text' => c['text'].to_s }
+          row['metadata'] = c['metadata'] if input['include_metadata']
+          JSON.generate(row)
+        end
+
+        { 'jsonl' => lines.join("\n"), 'lines' => lines.length }
+      end
+    },
+    to_vertex_datapoints: {
+      title: "Build Vertex datapoints",
+      subtitle: "Embeddings + metadata → upsert payload",
+      description: "Produce datapoints with restricts/numericRestricts ready for Vertex upsertDatapoints.",
+      input_fields: lambda do |object_definitions|
+        [
+          { name: "embeddings", type: "array", of: "object", list_mode_toggle: true, optional: false,
+            properties: object_definitions["embedding_object"] },
+          { name: "restrict_mode", control_type: "select", default: "per_key", sticky: true,
+            pick_list: [[ "Per-key namespaces", "per_key" ], [ "Flat namespace (key=value)", "flat" ]] },
+          { name: "flat_namespace", hint: "Used when restrict_mode = flat", sticky: true },
+          { name: "promote_numeric", type: "boolean", control_type: "checkbox", default: true,
+            hint: "Turn numeric metadata into numericRestricts[EQUAL]" }
+        ]
+      end,
+      output_fields: lambda do |object_definitions|
+        [
+          { name: "datapoints", type: "array", of: "object", properties: object_definitions["vertex_datapoint_upsert"] },
+          { name: "count", type: "integer" }
+        ]
+      end,
+      execute: lambda do |_connection, input|
+        mode = (input['restrict_mode'] || 'per_key').to_s
+        flat_ns = input['flat_namespace']
+        promote = !!input['promote_numeric']
+
+        dps = Array(input['embeddings']).map do |e|
+          meta = e['metadata'] || {}
+          restricts, numeric = call(:build_vertex_restricts, meta, (mode == 'flat' ? 'flat' : 'per_key'), flat_ns, promote)
+          {
+            'datapointId'    => e['id'],
+            'featureVector'  => Array(e['vector'] || []),
+            'restricts'      => (restricts if restricts.any?),
+            'numericRestricts' => (numeric if numeric.any?)
+          }.compact
+        end
+
+        { 'datapoints' => dps, 'count' => dps.length }
+      end
     }
+
   },
 
   # ==========================================
   # METHODS (Helper Functions)
   # ==========================================
   methods: {
+
+    build_vertex_restricts: lambda do |_connection, metadata, mode, flat_ns, promote_numeric|
+      md = metadata.is_a?(Hash) ? metadata : {}
+      restricts = []
+      numeric   = []
+
+      md.each do |k, v|
+        key = k.to_s
+        case v
+        when String
+          if mode == 'flat'
+            restricts << { 'namespace' => (flat_ns || 'tags'), 'allowList' => ["#{key}=#{v}"] }
+          else
+            restricts << { 'namespace' => key, 'allowList' => [v] }
+          end
+        when Array
+          vals = v.map(&:to_s)
+          if mode == 'flat'
+            # flatten: key=val for each
+            restricts << { 'namespace' => (flat_ns || 'tags'), 'allowList' => vals.map { |s| "#{key}=#{s}" } }
+          else
+            restricts << { 'namespace' => key, 'allowList' => vals }
+          end
+        when Integer
+          if promote_numeric
+            numeric << { 'namespace' => key, 'op' => 'EQUAL', 'valueInt' => v.to_i }
+          end
+        when Float
+          if promote_numeric
+            numeric << { 'namespace' => key, 'op' => 'EQUAL', 'valueDouble' => v.to_f }
+          end
+        end
+      end
+
+      [restricts, numeric]
+    end,
 
     chunk_text_with_overlap: lambda do |input|
       text = input['text'].to_s
@@ -2155,6 +2319,27 @@ require 'csv'
         ]
       end
     },
+
+  vertex_datapoint_upsert: {
+    fields: lambda do
+      [
+        { name: "datapointId", type: "string" },
+        { name: "featureVector", type: "array", of: "number" },
+        { name: "restricts", type: "array", of: "object", properties: [
+          { name: "namespace" },
+          { name: "allowList", type: "array", of: "string" },
+          { name: "denyList",  type: "array", of: "string" }
+        ]},
+        { name: "numericRestricts", type: "array", of: "object", properties: [
+          { name: "namespace" },
+          { name: "op" }, # EQUAL, LESS, GREATER, etc.
+          { name: "valueInt",    type: "integer" },
+          { name: "valueFloat",  type: "number"  },
+          { name: "valueDouble", type: "number"  }
+        ]}
+      ]
+    end
+  },
 
     vertex_batch: {
       fields: lambda do |connection, _config, object_definitions|
