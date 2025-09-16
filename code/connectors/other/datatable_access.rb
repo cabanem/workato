@@ -554,7 +554,90 @@
     pick_projects: lambda do |connection|
       r = call(:list_index, connection, "/api/projects", { page: 1, per_page: 200 })
       (r["data"] || []).map { |p| [p["name"] || p["id"].to_s, p["id"]] }
+    end,
+
+    # ----- Recipes / Folders / Projects -----
+    get_recipe_details: lambda do |connection, recipe_id|
+      path = "/api/recipes/#{recipe_id}"
+      call(:execute_with_retry, connection) { get(path) }
+    rescue RestClient::ExceptionWithResponse => e
+      hdrs = e.response&.headers || {}
+      cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
+      error("Failed to load recipe #{recipe_id} (#{e.http_code}). cid=#{cid} body=#{e.response&.body}")
+    end,
+
+    # Build and cache an in-memory folder index { id => folder_obj } for fast lookups
+    folders_index_cached: lambda do |connection|
+      return @folders_by_id if defined?(@folders_by_id) && @folders_by_id.present?
+      page = 1
+      acc  = {}
+      loop do
+        resp = call(:list_index, connection, "/api/folders", { page: page, per_page: 100 })
+        rows = resp["data"] || []
+        rows.each { |f| acc[f["id"]] = f }
+        break if rows.size < 100
+        page += 1
+      end
+      @folders_by_id = acc
+    end,
+
+    # Optionally cache projects, too (useful when you want names)
+    projects_index_cached: lambda do |connection|
+      return @projects_by_id if defined?(@projects_by_id) && @projects_by_id.present?
+      page = 1
+      acc  = {}
+      loop do
+        resp = call(:list_index, connection, "/api/projects", { page: page, per_page: 100 })
+        rows = resp["data"] || []
+        rows.each { |p| acc[p["id"]] = p }
+        break if rows.size < 100
+        page += 1
+      end
+      @projects_by_id = acc
+    end,
+
+    # Core resolver: recipe -> folder -> project (with names when available)
+    resolve_project_from_recipe: lambda do |connection, recipe_id|
+      rec   = call(:get_recipe_details, connection, recipe_id)
+      f_id  = rec["folder_id"]
+      error("Recipe #{recipe_id} did not include folder_id") if f_id.blank?
+
+      folders = call(:folders_index_cached, connection)
+      f = folders[f_id]
+      error("Folder #{f_id} not found or not visible to this token") if f.blank?
+
+      result = {
+        recipe_id: recipe_id,
+        folder_id: f_id,
+        folder_name: f["name"],
+        is_project_folder: !!f["is_project"],
+        project_id: nil,
+        project_name: nil,
+        project_folder_id: nil,
+        environment_host: connection["environment"]
+      }
+
+      if f["is_project"]
+        # The folder itself is a project root: find project by folder_id
+        projects = call(:projects_index_cached, connection)
+        proj = projects.values.find { |p| p["folder_id"] == f_id }
+        result[:project_id]       = proj&.dig("id")
+        result[:project_name]     = proj&.dig("name")
+        result[:project_folder_id]= f_id
+      else
+        # Child folder: project_id sits on the folder
+        result[:project_id] = f["project_id"]
+        if result[:project_id].present?
+          projects = call(:projects_index_cached, connection)
+          proj = projects[result[:project_id]]
+          result[:project_name]      = proj&.dig("name")
+          result[:project_folder_id] = proj&.dig("folder_id")
+        end
+      end
+
+      result
     end
+
   },
   
   # ==========================================
@@ -866,6 +949,31 @@
       end,
       execute: lambda do |connection, input|
         call(:devapi_create_folder, connection, input)
+      end
+    },
+    resolve_project_context: {
+      title: "Resolve project context from recipe",
+      subtitle: "Given a Recipe ID, return its folder and owning project (env-aware)",
+      input_fields: lambda do
+        [
+          { name: "recipe_id", optional: false,
+            hint: "Map from Recipe datapill (Recipe ID) or type it manually" }
+        ]
+      end,
+      output_fields: lambda do |_object_definitions|
+        [
+          { name: "recipe_id" },
+          { name: "folder_id" },
+          { name: "folder_name" },
+          { name: "is_project_folder", type: "boolean" },
+          { name: "project_id" },
+          { name: "project_name" },
+          { name: "project_folder_id" },
+          { name: "environment_host", label: "Environment host (region)" }
+        ]
+      end,
+      execute: lambda do |connection, input|
+        call(:resolve_project_from_recipe, connection, input["recipe_id"])
       end
     },
 
