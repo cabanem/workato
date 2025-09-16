@@ -71,7 +71,30 @@
       { name: 'validate_model_on_run',
         label: 'Validate model before run',
         type: 'boolean', control_type: 'checkbox', optional: true, sticky: true,
-        hint: 'Pre-flight check the chosen model and your project access before sending the request. Recommended.' }
+        hint: 'Pre-flight check the chosen model and your project access before sending the request. Recommended.' },
+      {
+        name: 'workato_api_host',
+        label: 'Workato API host',
+        hint: 'Base URL for the Workato Developer API. Defaults to https://www.workato.com',
+        optional: true,
+        default: 'https://www.workato.com',
+        sticky: true
+      },
+      {
+        name: 'workato_account_id',
+        label: 'Workato account ID',
+        hint: 'Required for listing data tables. Find it in your account URL or Profile → Account.',
+        optional: true,
+        sticky: true
+      },
+      {
+        name: 'workato_api_token',
+        label: 'Workato API token',
+        control_type: 'password',
+        hint: 'Personal access token with Data Tables read scope. Optional, but needed for dynamic table/column picklists.',
+        optional: true,
+        sticky: true
+      }
 
     ],
     authorization: {
@@ -407,6 +430,9 @@
 
       execute: lambda do |connection, input, _eis, _eos|
         call('validate_publisher_model!', connection, input['model'])
+        if input['rules_source'] == 'workato_table'
+          call('ensure_workato_api!', connection)
+        end
         payload = call('payload_for_categorize', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
@@ -973,13 +999,15 @@
       }.compact
     end,
     payload_for_categorize: lambda do |input|
-      categories = input['categories']&.map&.with_index do |c, _|
-                     if c['rule'].present?
-                       "#{c['key']} - #{c['rule']}"
-                     else
-                       c['key']&.to_s
-                     end
-                   end&.join('\n')
+      categories_arr =
+        if input['rules_source'] == 'workato_table'
+          call('load_categories_from_table', input)
+        else
+          (input['categories'] || []).map do |c|
+            c['rule'].present? ? "#{c['key']} - #{c['rule']}" : c['key'].to_s
+          end
+        end
+      categories = categories_arr&.join('\n')
       {
         'systemInstruction' => {
           'role' => 'model',
@@ -1370,6 +1398,83 @@
       end
 
       true
+    end,
+    ensure_workato_api!: lambda do |connection|
+      missing = []
+      missing << 'workato_api_host'   if connection['workato_api_host'].blank?
+      missing << 'workato_account_id' if connection['workato_account_id'].blank?
+      missing << 'workato_api_token'  if connection['workato_api_token'].blank?
+      if missing.present?
+        error("To use 'Workato data table' as rules source, please configure connection fields: #{missing.join(', ')}")
+      end
+    end,
+    workato_api_headers: lambda do |connection|
+      {
+        'Authorization' => "Bearer #{connection['workato_api_token']}",
+        'Content-Type'  => 'application/json'
+      }
+    end,
+    workato_api_base: lambda do |connection|
+      (connection['workato_api_host'] || 'https://www.workato.com').gsub(%r{/\z}, '')
+    end,
+    list_datatables: lambda do |connection|
+      call('ensure_workato_api!', connection)
+      base = call('workato_api_base', connection)
+      account = connection['workato_account_id']
+      get("#{base}/api/v2/accounts/#{account}/data_tables")
+        .headers(call('workato_api_headers', connection))
+        .after_error_response(/.*/) { |code, body, _h, msg| error("Data tables list failed (HTTP #{code}) - #{msg}: #{body}") }
+    end,
+    list_datatable_columns: lambda do |connection, table_id|
+      call('ensure_workato_api!', connection)
+      base = call('workato_api_base', connection)
+      account = connection['workato_account_id']
+      get("#{base}/api/v2/accounts/#{account}/data_tables/#{table_id}")
+        .headers(call('workato_api_headers', connection))
+        .after_error_response(/.*/) { |code, body, _h, msg| error("Get data table failed (HTTP #{code}) - #{msg}: #{body}") }
+    end,
+    fetch_datatable_rows: lambda do |connection, table_id, limit = 1000|
+      call('ensure_workato_api!', connection)
+      base = call('workato_api_base', connection)
+      account = connection['workato_account_id']
+      rows = []
+      page = 1
+      per_page = 200
+      loop do
+        resp = get("#{base}/api/v2/accounts/#{account}/data_tables/#{table_id}/rows")
+          .params(page: page, per_page: per_page)
+          .headers(call('workato_api_headers', connection))
+          .after_error_response(/.*/) { |code, body, _h, msg| error("List rows failed (HTTP #{code}) - #{msg}: #{body}") }
+        data = resp['rows'] || []
+        rows.concat(data)
+        break if data.length < per_page || rows.length >= limit
+        page += 1
+      end
+      rows
+    end,
+    load_categories_from_table: lambda do |input|
+      # Minimal validation; if connection creds aren’t present we error in ensure_workato_api!
+      rules_table_id  = input['rules_table_id'].to_s.strip
+      category_column = input['category_column'].to_s.strip
+      rule_column     = input['rule_column'].to_s.strip
+      error('Data table is required.') if rules_table_id.blank?
+      error('Category column is required.') if category_column.blank?
+
+      # connection not passed here; Workato provides it to execute/payload via closure binding
+      connection = connection() # SDK helper; current connection hash
+      rows = call('fetch_datatable_rows', connection, rules_table_id, 2000)
+
+      if input['only_active'] && input['active_column'].present?
+        active_col = input['active_column']
+        rows = rows.select { |r| !!r[active_col] }
+      end
+
+      rows.map do |r|
+        key  = r[category_column]
+        rule = rule_column.present? ? r[rule_column] : nil
+        next nil if key.blank?
+        rule.present? ? "#{key} - #{rule}" : key.to_s
+      end.compact.uniq
     end
 
   },
@@ -2100,12 +2205,27 @@
       fields: lambda do |_connection, _config_fields, object_definitions|
         object_definitions['text_model_schema'].concat(
           [
-            { name: 'text',
+            {
+              name: 'text',
               label: 'Source text',
               control_type: 'text-area',
               optional: false,
-              hint: 'Provide the text to be categorized' },
-            { name: 'categories',
+              hint: 'Provide the text to be categorized'
+            },
+            {
+              name: 'rules_source',
+              label: 'Rules source',
+              control_type: 'select',
+              pick_list: :rules_source_modes,
+              default: 'inline_list',
+              sticky: true,
+              optional: false,
+              hint: 'Choose how to provide categories/rules'
+            },
+            # --- Inline list (existing behavior) ---
+            {
+              name: 'categories',
+              ngIf: 'input.rules_source == "inline_list"',
               control_type: 'key_value',
               label: 'List of categories',
               empty_list_title: 'List is empty',
@@ -2115,15 +2235,86 @@
               type: 'array',
               of: 'object',
               optional: false,
-              hint: 'Create a list of categories to sort the text into. Rules are ' \
-                    'used to provide additional details to help classify what each category represents',
+              hint: 'Add categories (and optional rules) to classify into.',
               properties: [
-                { name: 'key',
-                  label: 'Category',
-                  hint: 'Enter category name' },
-                { name: 'rule',
-                  hint: 'Enter rule' }
-              ] }
+                { name: 'key',  label: 'Category', hint: 'Category name' },
+                { name: 'rule', label: 'Rule (optional)', hint: 'E.g. subject contains: “invoice”' }
+              ]
+            },
+            # --- Workato Data Table (new) ---
+            {
+              name: 'rules_table_id',
+              label: 'Data table',
+              ngIf: 'input.rules_source == "workato_table"',
+              optional: false,
+              control_type: 'select',
+              pick_list: :workato_datatables,
+              hint: 'Select a Workato Data Table with your categories/rules',
+              toggle_hint: 'Select from list',
+              toggle_field: {
+                name: 'rules_table_id',
+                label: 'Data table',
+                type: 'string',
+                control_type: 'text',
+                optional: false,
+                toggle_hint: 'Enter table ID manually'
+              }
+            },
+            {
+              name: 'category_column',
+              label: 'Category column',
+              ngIf: 'input.rules_source == "workato_table"',
+              optional: false,
+              control_type: 'select',
+              pick_list: :workato_datatable_columns,
+              pick_list_params: { table_id: 'rules_table_id' },
+              hint: 'Column that holds the category name',
+              toggle_hint: 'Select from list',
+              toggle_field: {
+                name: 'category_column',
+                type: 'string',
+                control_type: 'text',
+                optional: false,
+                toggle_hint: 'Enter column name manually'
+              }
+            },
+            {
+              name: 'rule_column',
+              label: 'Rule column (optional)',
+              ngIf: 'input.rules_source == "workato_table"',
+              optional: true,
+              control_type: 'select',
+              pick_list: :workato_datatable_columns,
+              pick_list_params: { table_id: 'rules_table_id' },
+              hint: 'Optional column with rule text (e.g., patterns). If blank, only category names will be used.',
+              toggle_hint: 'Select from list',
+              toggle_field: {
+                name: 'rule_column',
+                type: 'string',
+                control_type: 'text',
+                optional: true,
+                toggle_hint: 'Enter column name manually'
+              }
+            },
+            {
+              name: 'only_active',
+              label: 'Only active rows',
+              ngIf: 'input.rules_source == "workato_table"',
+              type: 'boolean',
+              control_type: 'checkbox',
+              sticky: true,
+              hint: 'If your table has an "active" boolean column, only include rows where active = true'
+            },
+            {
+              name: 'active_column',
+              label: 'Active column (optional)',
+              ngIf: 'input.rules_source == "workato_table" && input.only_active',
+              optional: true,
+              control_type: 'select',
+              pick_list: :workato_datatable_columns,
+              pick_list_params: { table_id: 'rules_table_id' },
+              hint: 'Name of the boolean column to filter on (true means active).'
+            }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2550,6 +2741,34 @@
         ['Question answering', 'QUESTION_ANSWERING'],
         ['Fact verification', 'FACT_VERIFICATION']
       ]
+    end,
+    rules_source_modes: lambda do
+      [
+        ['Inline list (manual)', 'inline_list'],
+        ['Workato data table',   'workato_table']
+      ]
+    end,
+    workato_datatables: lambda do |connection|
+      begin
+        resp = call('list_datatables', connection)
+        (resp['data_tables'] || resp).map do |t|
+          label = t['name'].presence || t['id']
+          [label, t['id']]
+        end
+      rescue StandardError
+        # Fallback to empty; UI will allow manual ID via toggle field
+        []
+      end
+    end,
+    workato_datatable_columns: lambda do |connection, table_id:|
+      return [] if table_id.blank?
+      begin
+        t = call('list_datatable_columns', connection, table_id)
+        cols = (t['columns'] || t.dig('data_table', 'columns') || [])
+        cols.map { |c| [c['name'], c['name']] }
+      rescue StandardError
+        []
+      end
     end
   }
   

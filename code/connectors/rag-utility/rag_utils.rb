@@ -118,6 +118,19 @@ require 'csv'
         # Token may not have this privilege; surface gently
         result[:data_tables] = "not reachable (#{e.http_code})"
       end
+      # Lightweight probes for project/folder lookups (privilege dependent)
+      begin
+        _projects = call(:execute_with_retry, connection, lambda { get('/api/projects').params(page: 1, per_page: 1) })
+        result[:projects] = "reachable"
+      rescue RestClient::ExceptionWithResponse => e
+        result[:projects] = "not reachable (#{e.http_code})"
+      end
+      begin
+        _folders = call(:execute_with_retry, connection, lambda { get('/api/folders').params(page: 1, per_page: 1) })
+        result[:folders] = "reachable"
+      rescue RestClient::ExceptionWithResponse => e
+        result[:folders] = "not reachable (#{e.http_code})"
+      end
       result[:status] = "connected"
     else
       result[:status] = "connected (no API token)"
@@ -1075,6 +1088,35 @@ require 'csv'
 
         { 'datapoints' => dps, 'count' => dps.length }
       end
+    },
+
+    # Resolve project context for a recipe
+    resolve_project_context: {
+      title: "Resolve project context from recipe",
+      subtitle: "Recipe → folder → owning project (environment-aware)",
+      description: "Given a Recipe ID, returns its folder and the project it belongs to.",
+      input_fields: lambda do
+        [
+          { name: "recipe_id", optional: false,
+            hint: "Map the Recipe ID datapill or enter an ID manually" }
+        ]
+      end,
+      output_fields: lambda do
+        [
+          { name: "recipe_id" },
+          { name: "folder_id" },
+          { name: "folder_name" },
+          { name: "is_project_folder", type: "boolean" },
+          { name: "project_id" },
+          { name: "project_name" },
+          { name: "project_folder_id" },
+          { name: "environment_host", label: "Environment host" }
+        ]
+      end,
+      execute: lambda do |connection, input|
+        error("API token is required for Developer API calls") if connection['api_token'].blank?
+        call(:resolve_project_from_recipe, connection, input["recipe_id"])
+      end
     }
 
   },
@@ -1750,6 +1792,82 @@ require 'csv'
       line_change_percentage = total_lines.zero? ? 0.0 : (((added.length + removed.length).to_f / total_lines) * 100).round(2)
 
       { added: added, removed: removed, modified_sections: modified_sections, line_change_percentage: line_change_percentage }
+    end,
+
+    # ---------- Project resolution helpers ----------
+    get_recipe_details: lambda do |connection, recipe_id|
+      path = "/api/recipes/#{recipe_id}"
+      call(:execute_with_retry, connection, -> { get(path) })
+    rescue RestClient::ExceptionWithResponse => e
+      hdrs = e.response&.headers || {}
+      cid  = hdrs["x-correlation-id"] || hdrs[:x_correlation_id]
+      error("Failed to load recipe #{recipe_id} (#{e.http_code}). cid=#{cid} body=#{e.response&.body}")
+    end,
+
+    folders_index_cached: lambda do |connection|
+      return @__folders_by_id if defined?(@__folders_by_id) && @__folders_by_id.present?
+      page = 1
+      acc  = {}
+      loop do
+        resp = call(:execute_with_retry, connection, -> { get('/api/folders').params(page: page, per_page: 100) })
+        rows = resp.is_a?(Array) ? resp : (resp["data"] || [])
+        rows.each { |f| acc[f["id"]] = f }
+        break if rows.size < 100
+        page += 1
+      end
+      @__folders_by_id = acc
+    end,
+
+    projects_index_cached: lambda do |connection|
+      return @__projects_by_id if defined?(@__projects_by_id) && @__projects_by_id.present?
+      page = 1
+      acc  = {}
+      loop do
+        resp = call(:execute_with_retry, connection, -> { get('/api/projects').params(page: page, per_page: 100) })
+        rows = resp.is_a?(Array) ? resp : (resp["data"] || [])
+        rows.each { |p| acc[p["id"]] = p }
+        break if rows.size < 100
+        page += 1
+      end
+      @__projects_by_id = acc
+    end,
+
+    resolve_project_from_recipe: lambda do |connection, recipe_id|
+      rec = call(:get_recipe_details, connection, recipe_id)
+      f_id = rec["folder_id"]
+      error("Recipe #{recipe_id} did not include folder_id") if f_id.blank?
+
+      folders = call(:folders_index_cached, connection)
+      folder  = folders[f_id]
+      error("Folder #{f_id} not found or not visible to this token") if folder.blank?
+
+      result = {
+        recipe_id: recipe_id,
+        folder_id: f_id,
+        folder_name: folder["name"],
+        is_project_folder: !!folder["is_project"],
+        project_id: nil,
+        project_name: nil,
+        project_folder_id: nil,
+        environment_host: connection["developer_api_host"]
+      }
+
+      if folder["is_project"]
+        projects = call(:projects_index_cached, connection)
+        proj = projects.values.find { |p| p["folder_id"] == f_id }
+        result[:project_id]        = proj&.dig("id")
+        result[:project_name]      = proj&.dig("name")
+        result[:project_folder_id] = f_id
+      else
+        result[:project_id] = folder["project_id"]
+        if result[:project_id].present?
+          projects = call(:projects_index_cached, connection)
+          proj = projects[result[:project_id]]
+          result[:project_name]      = proj&.dig("name")
+          result[:project_folder_id] = proj&.dig("folder_id")
+        end
+      end
+      result
     end,
 
     # ---------- HTTP helpers & endpoints ----------
