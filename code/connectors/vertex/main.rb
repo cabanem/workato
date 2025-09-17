@@ -245,7 +245,7 @@
 
   test: lambda do |connection|
     get("projects/#{connection['project']}/locations/#{connection['region']}/datasets").
-      after_error_response(/.*/) do |_code, body, _header, message|
+      after_error_response(/.*/) do |code, body, _header, message|
         call('handle_vertex_error', connection, code, body, message)
       end
   end,
@@ -282,7 +282,7 @@
               "/#{input['model']}:generateContent"
         # Make the request
         post(url, payload).
-          after_error_response(/.*/) do |_code, body, _header, message|
+          after_error_response(/.*/) do |code, body, _header, message|
             call('handle_vertex_error', connection, code, body, message)
         end
       end,
@@ -480,7 +480,7 @@
           call('ensure_workato_api!', connection)
         end
         # Build payload
-        payload = call('payload_for_categorize', input)
+        payload = call('payload_for_categorize', connection, input)
         # Build the url
         url = "projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent"
@@ -779,132 +779,692 @@
   },
 
   methods: {
-    generate_input_fields: lambda do |input|
-      schema = parse_json(input || '[]')
-      call('make_schema_builder_fields_sticky', schema)
-    end,
-    make_schema_builder_fields_sticky: lambda do |schema|
-      schema.map do |field|
-        if field['properties'].present?
-          field['properties'] = call('make_schema_builder_fields_sticky',
-                                     field['properties'])
+    # ─────────────────────────────────────────────────────────────────────────────
+    # -- Core error and HTTP utilities
+    # ─────────────────────────────────────────────────────────────────────────────
+    handle_vertex_error: lambda do |connection, code, body, message, context = {}|
+      # Parse the body for structured error information
+      error_details = begin
+        parsed = parse_json(body)
+        # Google APIs often nest the error message
+        parsed.dig('error', 'message') || parsed['message'] || body
+      rescue
+        body
+      end
+      
+      # Build base message based on status code
+      base_message = case code
+      when 400
+        "Invalid request format"
+      when 401
+        "Authentication failed - please check your credentials"
+      when 403
+        "Permission denied - verify Vertex AI API is enabled"
+      when 404
+        "Resource not found"
+      when 429
+        "Rate limit exceeded - please wait before retrying"
+      when 500
+        "Google service error - temporary issue"
+      when 502, 503, 504
+        "Google service temporarily unavailable"
+      else
+        "API error"
+      end
+      
+      # Add context if provided
+      if context[:action].present?
+        base_message = "#{context[:action]} failed: #{base_message}"
+      end
+      
+      # Build final message
+      if connection['verbose_errors']
+        error_message = "#{base_message} (HTTP #{code})"
+        error_message += "\nDetails: #{error_details}" if error_details.present?
+        error_message += "\nOriginal: #{message}" if message != error_details
+        error(error_message)
+      else
+        hint = case code
+        when 401, 403
+          "\nEnable verbose errors in connection settings for details"
+        when 429
+          "\nConsider adding delays between requests"
+        when 500..599
+          "\nThis is usually temporary - retry in a few moments"
+        else
+          ""
         end
-        field['sticky'] = true
-
-        field
+        error("#{base_message}#{hint}")
       end
     end,
+    workato_request: lambda do |connection, method:, path:, payload: nil, max_retries: 3|
+      call('ensure_workato_api!', connection)
+      base   = call('workato_api_base', connection)
+      url    = "#{base}#{path}"
+      hdrs   = call('workato_api_headers', connection)
+
+      attempt = 0
+      begin
+        attempt += 1
+        resp = if method == :get
+          get(url).headers(hdrs)
+        else
+          post(url, payload).headers(hdrs)
+        end
+
+        resp.after_error_response(/429|5\d{2}/) do |code, body, _h, message|
+          # retryable
+          if attempt <= max_retries
+            sleep(2 ** attempt) # 2s, 4s, 8s
+            raise "RETRY"       # bubble to rescue to re-run
+          else
+            # fall through to generic error
+            error_msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
+            error("Workato API throttled/failed (HTTP #{code}). #{error_msg}")
+          end
+        end.
+        after_error_response(/.*/) do |code, body, _h, message|
+          # non-retryable
+          if connection['verbose_errors']
+            error("Workato API error (HTTP #{code}) on #{path}: #{body}")
+          else
+            error("Workato API error (HTTP #{code}) on #{path}. Enable verbose errors for details.")
+          end
+        end
+
+      rescue => e
+        # loop will re-run when we raise "RETRY"
+        if e.message == 'RETRY'
+          retry
+        else
+          error("Workato API request failed: #{e.message}")
+        end
+      end
+    end,
+    workato_get:  lambda { |connection, path| call('workato_request', connection, method: :get,  path: path) },
+    workato_post: lambda { |connection, path, payload| call('workato_request', connection, method: :post, path: path, payload: payload) },
     replace_backticks_with_hash: lambda do |text|
       text&.gsub('```', '####')
     end,
-    extract_json: lambda do |resp|
-      json_txt = resp&.dig('candidates', 0, 'content', 'parts', 0, 'text')
-      return {} if json_txt.blank?
+    truthy?: lambda do |val|
+      case val
+      when TrueClass then true
+      when FalseClass then false
+      when Integer then val != 0
+      else
+        %w[true 1 yes y t].include?(val.to_s.strip.downcase)
+      end
+    end,
+    # ─────────────────────────────────────────────────────────────────────────────
+    # -- Vertex model discovery and validation
+    # ─────────────────────────────────────────────────────────────────────────────
+    fetch_publisher_models: lambda do |connection, publisher = 'google'|
+      # Build the cache key (incl all relevant param to ensure regions/publishers are cached separately)
+      region = connection['region'].presence || 'us-central1'
+      include_preview = connection['include_preview_models'] || false
+      cache_key = "models_#{region}_#{publisher}_preview_#{include_preview}"
 
-      # Cleanup markdown code blocks
-      json = json_txt.gsub(/^```(?:json|JSON)?\s*\n?/, '')  # Remove opening fence
-                    .gsub(/\n?```\s*$/, '')                # Remove closing fence
-                    .gsub(/`+$/, '')                       # Remove any trailing backticks
-                    .strip
+      # Try for a cache hit (using Workato's built-in caching)
+      begin
+        cached_data = workato.cache.get(cache_key)
+        if cached_data.present?
+          # Check if cache is still fresh (we'll cache for 1 hour)
+          cache_time = Time.parse(cached_data['cached_at'])
+          if cache_time > 1.hour.ago
+            puts "Using cached model list (#{cached_data['models'].length} models, cached #{((Time.now - cache_time) / 60).round} minutes ago)"
+            return cached_data['models']
+          else
+            puts "Model cache expired, refreshing..."
+          end
+        end
+      rescue => e
+        # If cache access fails, continue without it
+        puts "Cache access failed: #{e.message}, fetching fresh data"
+      end
+      
+      # Fetch fresh models from the API
+      models = call('fetch_fresh_publisher_models', connection, publisher, region)
+      
+      # Cache the results if we got any
+      if models.present?
+        begin
+          cache_data = {
+            'models' => models,
+            'cached_at' => Time.now.iso8601,
+            'count' => models.length
+          }
+          # Cache for 1 hour (3600 seconds)
+          workato.cache.set(cache_key, cache_data, 3600)
+          puts "Cached #{models.length} models for future use"
+        rescue => e
+          puts "Failed to cache models: #{e.message}"
+        end
+      end
+      
+      models
+    end,
+    fetch_fresh_publisher_models: lambda do |connection, publisher, region|
+      # Use the regional service endpoint; list is in v1beta1.
+      # Docs: publishers.models.list (v1beta1), supports 'view' and pagination.
+      # https://cloud.google.com/vertex-ai/docs/reference/rest/v1beta1/publishers.models/list
+      host = "https://#{region}-aiplatform.googleapis.com"
+      url = "#{host}/v1beta1/publishers/#{publisher}/models"
+      
+      models = []
+      page_token = nil
+      pages_fetched = 0
+      max_pages = 5  # Reduced from 10 for faster response
+      total_api_time = 0
+      
+      begin
+        loop do
+          pages_fetched += 1
+          
+          # Stop if we've fetched enough pages
+          if pages_fetched > max_pages
+            puts "Reached maximum page limit (#{max_pages}), stopping model fetch"
+            break
+          end
+          
+          # Time each API call for monitoring
+          api_start = Time.now
+          
+          resp = get(url).
+            params(
+              page_size: 500,  # Increased from 200 - get more models per request
+              page_token: page_token,
+              view: 'PUBLISHER_MODEL_VIEW_BASIC',  # Changed from FULL - we only need basic info
+              # filter: build_model_filter(connection)  # << server-side filtering is limited, stick to client-side
+            ).
+            after_error_response(/.*/) do |code, body, _hdrs, message|
+              # Log but don't fail completely
+              if connection['verbose_errors']
+                puts "Model listing failed (HTTP #{code}): #{body}"
+              else
+                puts "Model listing failed (HTTP #{code}) - using static fallback"
+              end
+              raise "API Error"
+            end
+          
+          api_time = Time.now - api_start
+          total_api_time += api_time
+          
+          batch = resp['publisherModels'] || []
+          models.concat(batch)
+          
+          puts "Fetched page #{pages_fetched}: #{batch.length} models in #{api_time.round(2)}s"
+          
+          # Check for pagination
+          page_token = resp['nextPageToken']
+          
+          # Smart early exit - if we have enough models, stop fetching
+          if models.length >= 100 && !connection['fetch_all_models']
+            puts "Have #{models.length} models, stopping early for performance"
+            break
+          end
+          
+          break if page_token.blank? || batch.empty?
+        end
+        
+        puts "Total model fetch: #{models.length} models in #{total_api_time.round(2)}s across #{pages_fetched} pages"
+        models
+        
+      rescue => e
+        puts "Failed to fetch models from API: #{e.message}"
+        # Return empty array to trigger static fallback
+        []
+      end
+    end,
+    validate_publisher_model!: lambda do |connection, model_name|
+      # Early exit conditions (no need to validate in input absent or validation disabled)
+      return if model_name.blank?
+      return unless connection['validate_model_on_run']
+      
+      # This is the caching mechanism - @validated_models persists within a single execution
+      # In Workato, instance variables (@) live for the duration of one recipe execution
+      @validated_models ||= {}
+
+      # Create a unique cache key that includes both region and model (model avail can vary by region)
+      cache_key = "#{connection['region']}/#{model_name}"
+      
+      # Check cache first - if we've already validated this exact model in this region, skip
+      if @validated_models[cache_key]
+        # Add logging for debugging
+        puts "Model #{model_name} already validated in #{connection['region']}, using cache"
+        return
+      end
+      
+      # 1. Validate model name format first (no API call needed)
+      # regex checks for the pattern: publishers/{publisher}/models/{model}
+      unless model_name.match?(/^publishers\/[^\/]+\/models\/[^\/]+$/)
+        error("Invalid model name format: #{model_name}\n" \
+              "Expected format: publishers/{publisher}/models/{model}\n" \
+              "Example: publishers/google/models/gemini-1.5-pro")
+      end
+      
+      # Verify the model actually exists
+      region = connection['region'].presence || 'us-central1'
+      
+      # Build the validation URL (v1 endpoint for model metadata)
+      url = "https://#{region}-aiplatform.googleapis.com/v1/#{model_name}"
 
       begin
-        parse_json(json) || {}
+        # Make the validation request with specific error handling
+        resp = get(url).
+          params(view: 'PUBLISHER_MODEL_VIEW_BASIC').  # Changed from FULL to BASIC for speed
+          after_error_response(/404/) do |code, body, _hdrs, message|
+            # Model not found - provide helpful context about what might be wrong
+            error("Model '#{model_name}' not found in region '#{region}'.\n" \
+                  "Possible issues:\n" \
+                  "• Model name typo (check spelling carefully)\n" \
+                  "• Model not available in #{region} (try us-central1)\n" \
+                  "• Model deprecated or renamed\n" \
+                  "• Using preview model without enabling preview models in connection")
+          end.
+          after_error_response(/403/) do |code, body, _hdrs, message|
+            # Permission denied - guide user to fix their setup
+            error("Access denied to model '#{model_name}'.\n" \
+                  "To fix this:\n" \
+                  "1. Verify Vertex AI API is enabled in Google Cloud Console\n" \
+                  "2. Check service account has 'Vertex AI User' role\n" \
+                  "3. Ensure billing is enabled for your project\n" \
+                  "4. Confirm project ID is correct: #{connection['project']}")
+          end.
+          after_error_response(/.*/) do |code, body, _hdrs, message|
+            # Use the centralized error handler for other errors
+            call('handle_vertex_error', connection, code, body, message)
+          end
+        
+        # Additional validation: Check if model is GA when preview models aren't allowed
+        unless connection['include_preview_models']
+          stage = resp['launchStage'].to_s
+          if stage.present? && stage != 'GA'
+            error("Model '#{model_name}' is in #{stage} stage (not Generally Available).\n" \
+                  "To use preview models:\n" \
+                  "1. Go to your connection settings\n" \
+                  "2. Enable 'Include preview/experimental models'\n" \
+                  "3. Save and retry\n\n" \
+                  "Note: Preview models may have different pricing and stability")
+          end
+        end
+        
+        # Success! Cache the validation result
+        @validated_models[cache_key] = {
+          validated_at: Time.now,
+          launch_stage: resp['launchStage'],
+          model_version: resp['versionId']
+        }
+        
+        puts "Model #{model_name} validated successfully in #{region}"
+        
       rescue => e
-        # Log error for debugging, but return empty hash to prevent action failure
-        puts "JSON parsing failed: #{e.message}. Raw text: #{json_txt}"
-        {}
+        # If anything goes wrong, provide a clear error message
+        error("Model validation failed: #{e.message}\n" \
+              "This usually means a temporary network issue. Try again in a moment.")
       end
     end,
-    get_safety_ratings: lambda do |ratings|
-      {
-        'sexually_explicit' =>
-          ratings&.find do |r|
-            r['category'] == 'HARM_CATEGORY_SEXUALLY_EXPLICIT'
-          end&.[]('probability'),
-        'hate_speech' =>
-          ratings&.find { |r| r['category'] == 'HARM_CATEGORY_HATE_SPEECH' }&.[]('probability'),
-        'harassment' =>
-          ratings&.find { |r| r['category'] == 'HARM_CATEGORY_HARASSMENT' }&.[]('probability'),
-        'dangerous_content' =>
-          ratings&.find do |r|
-            r['category'] == 'HARM_CATEGORY_DANGEROUS_CONTENT'
-          end&.[]('probability')
-      }
-    end,
-    check_finish_reason: lambda do |reason|
-      case reason&.downcase
-      when 'finish_reason_unspecified'
-        error 'ERROR - The finish reason is unspecified.'
-      when 'other'
-        error 'ERROR - Token generation stopped due to an unknown reason.'
-      when 'max_tokens'
-        error 'ERROR - Token generation reached the configured maximum output tokens.'
-      when 'safety'
-        error 'ERROR - Token generation stopped because the content potentially contains ' \
-              'safety violations.'
-      when 'recitation'
-        error 'ERROR - Token generation stopped because the content potentially contains ' \
-              'copyright violations.'
-      when 'blocklist'
-        error 'ERROR - Token generation stopped because the content contains forbidden items.'
-      when 'prohibited_content'
-        error 'ERROR - Token generation stopped for potentially containing prohibited content.'
-      when 'spii'
-        error 'ERROR - Token generation stopped because the content potentially contains ' \
-              'Sensitive Personal Identifiable Information (SPII).'
-      when 'malformed_function_call'
-        error 'ERROR - The function call generated by the model is invalid.'
-      end
-    end,
-    extract_generic_response: lambda do |resp, is_json_response|
-      call('check_finish_reason', resp.dig('candidates', 0, 'finishReason'))
-      ratings = call('get_safety_ratings', resp.dig('candidates', 0, 'safetyRatings'))
-      next { 'answer' => 'N/A', 'safety_ratings' => {} } if ratings.blank?
+    # - Partition models by capability.
+    vertex_model_bucket: lambda do |model_id|
+      id = model_id.to_s.downcase
 
-      answer = if is_json_response
-                 call('extract_json', resp)&.[]('response')
-               else
-                 resp&.dig('candidates', 0, 'content', 'parts', 0, 'text')
-               end
+      # Use a hash for 0(1) lookup instead of multiple str includes
+      @model_categories ||= {
+        'embedding' => %w[embedding gecko multimodalembedding embeddinggemma],
+        'image' => %w[vision imagegeneration imagen],
+        'audio' => %w[tts audio speech],
+        'code' => %w[code codey],
+        'chat' => %w[chat],
+        'text' => []  # Default category
+      }
+
+      # Find the category for this model
+      @model_categories.each do |category, keywords|
+        return category.to_sym if keywords.any? { |keyword| id.include?(keyword) }
+      end
+    
+      :text # default to text if no match
+    end,
+    # - Sort model options by version, tier, then alphabetically      
+    sort_model_options: lambda do |options|
+      options.sort_by do |label, value|
+        # Extract version number if present
+        version_match = label.match(/(\d+)\.(\d+)/)
+        major_version = version_match ? version_match[1].to_i : 0
+        minor_version = version_match ? version_match[2].to_i : 0
+        
+        # Determine model tier
+        tier = case label
+              when /\bPro\b/i then 0
+              when /\bFlash\b/i then 1  
+              when /\bLite\b/i then 2
+              else 3
+              end
+        
+        # Sort by: version (desc), tier, then alphabetical
+        [
+          -major_version,  # Newest version first
+          -minor_version,  # Higher minor version first
+          tier,            # Pro > Flash > Lite
+          label            # Alphabetical as tiebreaker
+        ]
+      end
+    end,
+    # - Filter/sort + convert to picklist options [label, value]
+    to_model_options: lambda do |models, bucket:, include_preview: false|
+      return [] if models.blank?
+      
+      # Pre-compile the regex for retired models to avoid recompiling
+      retired_pattern = /(^|-)1\.0-|text-bison|chat-bison/
+    
+      # Filter models efficiently
+      filtered = models.select do |m|
+        model_id = m['name'].to_s.split('/').last
+        next false if model_id.blank?
+        
+        # Skip retired models
+        next false if model_id =~ retired_pattern
+        
+        # Check bucket match
+        next false unless call('vertex_model_bucket', model_id) == bucket
+        
+        # Check GA status if needed
+        if !include_preview
+          stage = m['launchStage'].to_s
+          next false unless stage == 'GA' || stage.blank?
+        end
+        
+        true
+      end
+      
+      # Extract unique model IDs efficiently
+      seen_ids = Set.new
+      unique_models = filtered.select do |m|
+        id = m['name'].to_s.split('/').last
+        seen_ids.add?(id)  # Returns true if added (wasn't present), false if already present
+      end
+      
+      # Build options with better sorting
+      options = unique_models.map do |m|
+        id = m['name'].to_s.split('/').last
+        # Create a human-friendly label
+        label = create_model_label(id, m)
+        [label, "publishers/google/models/#{id}"]
+      end
+      
+      # Sort with a more sophisticated algorithm
+      sort_model_options(options)
+    end,
+    # - Context-aware model label creation
+    create_model_label: lambda do |model_id, model_metadata = {}|
+      # Start with the basic formatting
+      label = model_id.gsub('-', ' ').split.map { |word| 
+        # Keep version numbers as-is, capitalize other words
+        word =~ /^\d/ ? word : word.capitalize 
+      }.join(' ')
+      
+      # Add helpful context if available
+      if model_metadata['launchStage'].present? && model_metadata['launchStage'] != 'GA'
+        label += " (#{model_metadata['launchStage']})"
+      end
+      
+      label
+    end,
+    # - Picklist generator with static fallback
+    dynamic_model_picklist: lambda do |connection, bucket, static_fallback|
+      # 1. Check if dynamic models are enabled (return to static if not)
+      unless connection['dynamic_models']
+        puts "Dynamic models disabled, using static list"
+        return static_fallback
+      end
+
+      # 2. Fetch models (with caching)
+      begin
+        models = call('fetch_publisher_models', connection, 'google')
+        
+        if models.present?
+          # Convert to options
+          options = call('to_model_options', models,
+                        bucket: bucket,
+                        include_preview: connection['include_preview_models'])
+          
+          # 3. Ensure we have options, otherwise fall back
+          if options.present?
+            puts "Returning #{options.length} dynamic models for #{bucket}"
+            return options
+          else
+            puts "No models matched criteria for #{bucket}, using static list"
+            return static_fallback
+          end
+        end
+      rescue => e
+        puts "Error in dynamic model fetch: #{e.message}"
+      end
+      
+      # 4. Ultimate fallback to static list
+      puts "All dynamic fetch attempts failed, using static list"
+      static_fallback
+    end,
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # -- Workato Data Tables
+    # ─────────────────────────────────────────────────────────────────────────────
+    ensure_workato_api!: lambda do |connection|
+      missing = []
+      missing << 'workato_api_token' if connection['workato_api_token'].blank?
+      error("To use 'Workato data table' as rules source, please configure connection fields: #{missing.join(', ')}") if missing.present?
+    end,
+    workato_api_headers: lambda do |connection|
       {
-        'answer' => answer,
-        'safety_ratings' => ratings,
-        'usage' => resp['usageMetadata']
+        'Authorization' => "Bearer #{connection['workato_api_token']}",
+        'Content-Type'  => 'application/json'
       }
     end,
-    extract_generated_email_response: lambda do |resp|
-      call('check_finish_reason', resp.dig('candidates', 0, 'finishReason'))
-      ratings = call('get_safety_ratings', resp.dig('candidates', 0, 'safetyRatings'))
-      json = call('extract_json', resp)
-      {
-        'subject' => json&.[]('subject'),
-        'body' => json&.[]('body'),
-        'safety_ratings' => ratings,
-        'usage' => resp['usageMetadata']
+    workato_api_base: lambda do |connection|
+      host = connection['workato_api_host'].presence || 'https://app.workato.com'
+      host.gsub(%r{/\z}, '')
+    end,
+    list_datatables: lambda do |connection|
+      resp = call('workato_get', connection, '/api/v1/tables')
+      resp
+    end,
+    list_datatable_columns: lambda do |connection, table_id|
+      error("Data table is required.") if table_id.to_s.strip.blank?
+      call('workato_get', connection, "/api/v1/tables/#{table_id}")
+    end,
+    fetch_datatable_rows: lambda do |connection, table_id, limit = 1000|
+      error("Data table is required.") if table_id.to_s.strip.blank?
+      rows  = []
+      token = nil
+
+      while rows.length < limit
+        body = {
+          select: nil,  # all columns
+          where:  nil,
+          order:  nil,
+          limit:  [200, limit - rows.length].min,
+          continuation_token: token
+        }.compact
+
+        resp  = call('workato_post', connection, "/api/v1/tables/#{table_id}/records/query", body)
+        batch = resp['records'] || resp['data'] || []
+        rows.concat(batch)
+        token = resp['continuation_token']
+        break if token.blank? || batch.empty?
+      end
+
+      rows
+    end,
+    cached_table_rows: lambda do |connection, table_id, limit = 2000|
+      cache_key = "dt_rows_#{call('workato_api_base', connection)}_#{table_id}"
+      cached    = workato.cache.get(cache_key)
+      if cached.present?
+        ts = Time.parse(cached['cached_at']) rescue nil
+        if ts && ts > 60.seconds.ago
+          return cached['rows']
+        end
+      end
+      rows = call('fetch_datatable_rows', connection, table_id, limit)
+      workato.cache.set(cache_key, { 'rows' => rows, 'cached_at' => Time.now.iso8601 }, 60) rescue nil
+      rows
+    end,
+    load_categories_from_table: lambda do |connection, input|
+      rules_table_id  = input['rules_table_id'].to_s.strip
+      category_column = input['category_column'].to_s.strip
+      rule_column     = input['rule_column'].to_s.strip
+
+      error('Data table is required.') if rules_table_id.blank?
+      error('Category column is required.') if category_column.blank?
+
+      # Validate columns
+      table_info   = call('list_datatable_columns', connection, rules_table_id)
+      columns      = table_info['columns'] || table_info.dig('data_table', 'columns') || []
+      column_names = columns.map { |c| c['name'] }
+
+      unless column_names.include?(category_column)
+        error("Category column '#{category_column}' not found. Available: #{column_names.join(', ')}")
+      end
+      if rule_column.present? && !column_names.include?(rule_column)
+        error("Rule column '#{rule_column}' not found. Available: #{column_names.join(', ')}")
+      end
+      if input['only_active'] && input['active_column'].present?
+        active_col = input['active_column']
+        unless column_names.include?(active_col)
+          error("Active column '#{active_col}' not found. Available: #{column_names.join(', ')}")
+        end
+      end
+
+      # Fetch rows (cached briefly for UX)
+      rows = call('cached_table_rows', connection, rules_table_id, 2000)
+
+      # Filter by "active" if requested
+      if input['only_active'] && input['active_column'].present?
+        active_col = input['active_column']
+        rows = rows.select { |r| call('truthy?', r[active_col]) }
+      end
+
+      # Project into category/rule strings
+      categories = rows.map do |r|
+        key = r[category_column]
+        next nil if key.blank?
+        if rule_column.present?
+          rule = r[rule_column]
+          rule.present? ? "#{key} - #{rule}" : key.to_s
+        else
+          key.to_s
+        end
+      end.compact.uniq
+
+      error("No valid categories found in the table. Check your data and column mappings.") if categories.empty?
+      categories
+    end,
+    get_cached_datatables: lambda do |connection|
+      cache_key = "datatables_#{connection['workato_api_host']}"
+      cached = workato.cache.get(cache_key)
+      
+      if cached.present?
+        cache_time = Time.parse(cached['cached_at'])
+        if cache_time > 5.minutes.ago
+          puts "Using cached datatables (#{cached['count']} tables)"
+          return cached['tables']
+        end
+      end
+      
+      # Fetch fresh data
+      tables = call('fetch_fresh_datatables', connection)
+      
+      # Cache if successful
+      if tables.present?
+        workato.cache.set(cache_key, {
+          'tables' => tables,
+          'cached_at' => Time.now.iso8601,
+          'count' => tables.length
+        }, 300)  # 5 minute cache
+      end
+      
+      tables
+    end,
+    get_cached_table_columns: lambda do |connection, table_id|
+      return [] if table_id.blank?
+      
+      cache_key = "table_cols_#{connection['workato_api_host']}_#{table_id}"
+      cached = workato.cache.get(cache_key)
+      
+      if cached.present?
+        cache_time = Time.parse(cached['cached_at'])
+        if cache_time > 10.minutes.ago
+          puts "Using cached columns for table #{table_id}"
+          return cached['columns']
+        end
+      end
+      
+      # Fetch fresh column data
+      columns = call('fetch_table_columns', connection, table_id)
+      
+      # Cache the results
+      if columns.present?
+        workato.cache.set(cache_key, {
+          'columns' => columns,
+          'cached_at' => Time.now.iso8601
+        }, 600)  # 10 minute cache
+      end
+      
+      columns
+    end,
+    # Direct fetch methods (no caching)
+    fetch_fresh_datatables: lambda do |connection|
+      response = call('workato_get', connection, '/api/v1/tables')
+      tables = response['data_tables'] || response || []
+      puts "Fetched #{tables.length} datatables from API"
+      tables
+    end,
+    fetch_table_columns: lambda do |connection, table_id|
+      response = call('workato_get', connection, "/api/v1/tables/#{table_id}")
+      columns = response['columns'] || response.dig('data_table', 'columns') || []
+      puts "Fetched #{columns.length} columns for table #{table_id}"
+      columns
+    end,
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # -- Payload construction
+    # ─────────────────────────────────────────────────────────────────────────────
+    # = BASE PAYLOAD BUILDER =
+    build_base_payload: lambda do |instruction, user_content, safety_settings = nil, options = {}|
+      # Build the base structure
+      payload = {
+        'systemInstruction' => {
+          'role' => 'model',
+          'parts' => [{ 'text' => instruction }]
+        },
+        'contents' => [
+          {
+            'role' => 'user',
+            'parts' => if user_content.is_a?(Array)
+              user_content  # Allow passing pre-built parts array
+            else
+              [{ 'text' => user_content }]  # Default to text part
+            end
+          }
+        ],
+        'generationConfig' => options['generationConfig'] || { 'temperature' => 0 }
       }
+      
+      # Add safety settings if provided
+      payload['safetySettings'] = safety_settings if safety_settings.present?
+      
+      # Allow additional top-level fields through options
+      options.except('generationConfig').each do |key, value|
+        payload[key] = value if value.present?
+      end
+      
+      payload.compact
     end,
-    extract_parsed_response: lambda do |resp|
-      call('check_finish_reason', resp.dig('candidates', 0, 'finishReason'))
-      ratings = call('get_safety_ratings', resp.dig('candidates', 0, 'safetyRatings'))
-      json = call('extract_json', resp)
-      json&.each_with_object({}) do |(key, value), hash|
-        hash[key] = value
-      end&.merge('safety_ratings' => ratings,
-                 'usage' => resp['usageMetadata'])
-    end,
-    extract_embedding_response: lambda do |resp|
-      { 'embedding' => resp&.dig('predictions', 0, 'embeddings', 'values')&.
-        map do |embedding|
-        { 'value' => embedding }
-      end }
-    end,
-    payload_for_send_message: lambda do |input|
+    build_conversation_payload: lambda do |input|
       # Handle generation config with response schema
       if input&.dig('generationConfig', 'responseSchema').present?
-        parsed = parse_json(input.dig('generationConfig', 'responseSchema'))
-        input['generationConfig']['responseSchema'] = parsed
+        input['generationConfig']['responseSchema'] = 
+          parse_json(input.dig('generationConfig', 'responseSchema'))
       end
-
+      
       # Handle tools with function declarations
       if input['tools'].present?
         input['tools'] = input['tools'].map do |tool|
@@ -919,269 +1479,185 @@
           tool
         end.compact
       end
-
-      messages = input['messages']
-      input['contents'] = if input['message_type'] == 'single_message'
-        [
-          {
-            'role' => 'user',
-            'parts' => [
-              { 'text' => messages['message'] }
-            ]
-          }
-        ]
+      
+      # Build contents based on message type
+      contents = if input['message_type'] == 'single_message'
+        [{
+          'role' => 'user',
+          'parts' => [{ 'text' => input.dig('messages', 'message') }]
+        }]
       else
-        messages&.[]('chat_transcript')&.map do |m|
-          # Build parts array with only non-empty elements
-          parts = []
-          
-          parts << { 'text' => m['text'] } if m['text'].present?
-          
-          parts << { 'fileData' => m['fileData'] } if m['fileData'].present?
-          
-          parts << { 'inlineData' => m['inlineData'] } if m['inlineData'].present?
-          
-          if m['functionCall'].present?
-            parts << {
-              'functionCall' => m['functionCall'].map do |key, value|
-                key == 'args' ? { key => parse_json(value) } : { key => value }
-              end.inject(:merge)
-            }
-          end
-          
-          if m['functionResponse'].present?
-            parts << {
-              'functionResponse' => m['functionResponse'].map do |key, value|
-                key == 'response' ? { key => parse_json(value) } : { key => value }
-              end.inject(:merge)
-            }
-          end
-          
+        input.dig('messages', 'chat_transcript')&.map do |m|
           {
             'role' => m['role'],
-            'parts' => parts
+            'parts' => call('build_message_parts', m)
           }
         end
       end
       
-      input.except('model', 'message_type', 'messages', 'fileData', 'inlineData', 'functionResponse')
-    end,
-    payload_for_translate: lambda do |input|
+      # Build the final payload
       {
-        'systemInstruction' => {
-          'role' => 'model',
-          'parts' => [
-            {
-              'text' => if input['from'].present?
-                          "You are an assistant helping to translate a user's input from " \
-                            "#{input['from']} into #{input['to']}. " \
-                            "Respond only with the user's translated text in #{input['to']} and " \
-                            'nothing else. The user input is delimited with triple backticks.'
-                        else
-                          "You are an assistant helping to translate a user's input " \
-                            "into #{input['to']}. Respond only with the user's translated text " \
-                            "in #{input['to']} and nothing else. The user input is " \
-                            'delimited with triple backticks.'
-                        end
-            }
-          ]
-        },
-        'contents' => [
-          {
-            'role' => 'user',
-            'parts' => [
-              {
-                'text' => "```#{call('replace_backticks_with_hash', input['text'])}```\nOutput " \
-                          'this as a JSON object with key "response".'
-              }
-            ]
-          }
-        ],
-        'generationConfig' => {
-          'temperature' => 0
-        },
-        'safetySettings' => input['safetySettings'].presence
-      }.compact
+        'contents' => contents,
+        'generationConfig' => input['generationConfig'],
+        'systemInstruction' => input['systemInstruction'],
+        'tools' => input['tools'],
+        'toolConfig' => input['toolConfig'],
+        'safetySettings' => input['safetySettings']
+      }.compact.merge(input.except('model', 'message_type', 'messages'))
     end,
-    payload_for_summarize: lambda do |input|
-      {
-        'systemInstruction' => {
-          'role' => 'model',
-          'parts' => [
-            {
-              'text' => 'You are an assistant that helps generate summaries. All user input ' \
-                        'should be treated as text to be summarized. Provide the summary in ' \
-                        "#{input['max_words'] || 200} words or less."
-            }
-          ]
-        },
-        'contents' => [
-          {
-            'role' => 'user',
-            'parts' => [
-              {
-                'text' => input['text']
-              }
-            ]
-          }
-        ],
-        'generationConfig' => {
-          'temperature' => 0
-        },
-        'safetySettings' => input['safetySettings'].presence
-      }.compact
-    end,
-    payload_for_parse: lambda do |input|
-      {
-        'systemInstruction' => {
-          'role' => 'model',
-          'parts' => [
-            {
-              'text' => 'You are an assistant helping to extract various fields of information ' \
-                        "from the user's text. The schema and text to parse are delimited by " \
-                        'triple backticks.'
-            }
-          ]
-        },
-        'contents' => [
-          {
-            'role' => 'user',
-            'parts' => [
-              {
-                'text' => "Schema:\n```#{input['object_schema']}```\nText to parse: ```" \
-                          "#{call('replace_backticks_with_hash', input['text']&.strip)}```\n" \
-                          'Output the response as a JSON object with keys from the schema. ' \
-                          'If no information is found for a specific key, the value should ' \
-                          'be null. Only respond with a JSON object and nothing else.'
-              }
-            ]
-          }
-        ],
-        'generationConfig' => {
-          'temperature' => 0
-        },
-        'safetySettings' => input['safetySettings'].presence
-      }.compact
-    end,
-    payload_for_email: lambda do |input|
-      {
-        'systemInstruction' => {
-          'role' => 'model',
-          'parts' => [
-            {
-              'text' => 'You are an assistant helping to generate emails based on the ' \
-                        "user's input. Based on the input ensure that you generate an " \
-                        'appropriate subject topic and body. Ensure the body contains a ' \
-                        'salutation and closing. The user input is delimited with triple ' \
-                        'backticks. Use it to generate an email and perform no other actions.'
-            }
-          ]
-        },
-        'contents' => [
-          {
-            'role' => 'user',
-            'parts' => [
-              {
-                'text' => 'User description:```' \
-                          "#{call('replace_backticks_with_hash', input['email_description'])}" \
-                          "```\nOutput the email from the user description as a JSON object " \
-                          'with keys for "subject" and "body". If an email cannot be generated, ' \
-                          'input null for the keys.'
-              }
-            ]
-          }
-        ],
-        'generationConfig' => {
-          'temperature' => 0
-        },
-        'safetySettings' => input['safetySettings'].presence
-      }.compact
-    end,
-    payload_for_categorize: lambda do |input|
-      categories_arr =
-        if input['rules_source'] == 'workato_table'
-          call('load_categories_from_table', input)
-        else
-          (input['categories'] || []).map do |c|
-            c['rule'].present? ? "#{c['key']} - #{c['rule']}" : c['key'].to_s
+    build_message_parts: lambda do |m|
+      parts = []
+      parts << { 'text' => m['text'] } if m['text'].present?
+
+      if m['fileData'].present?
+        parts << { 'fileData' => m['fileData'] } # { mimeType, fileUri }
+      end
+      if m['inlineData'].present?
+        parts << { 'inlineData' => m['inlineData'] } # { mimeType, data }
+      end
+
+      if m['functionCall'].present?
+        fc = m['functionCall']
+        # if args provided as string JSON, parse once
+        if fc['args'].is_a?(String) && fc['args'].strip.start_with?('{','[')
+          begin
+            fc = fc.merge('args' => parse_json(fc['args']))
+          rescue
+            # keep raw if parse fails; server will validate
           end
         end
-      categories = categories_arr&.join('\n')
-      {
-        'systemInstruction' => {
-          'role' => 'model',
-          'parts' => [
-            {
-              'text' => if input['categories'].all? { |arr| arr['rule'].present? }
-                          'You are an assistant helping to categorize text into the various ' \
-                            'categories mentioned. Respond with only the category name. The ' \
-                            'categories and text to classify are delimited by triple backticks.' \
-                            'The category information is provided as “Category name: Rule”. Use ' \
-                            'the rule to classify the text appropriately into one single category. ' \
-                            'to identify the fields in the text.'
-                        else
-                          'You are an assistant helping to categorize text into the various ' \
-                            'categories mentioned. Respond with only one category name. The ' \
-                            'categories and text to classify are delimited by triple backticks.'
-                        end
-            }
-          ]
-        },
-        'contents' => [
-          {
-            'role' => 'user',
-            'parts' => [
-              {
-                'text' => "Categories:\n```#{categories}```\nText to classify: ```" \
-                          "#{call('replace_backticks_with_hash', input['text']&.strip)}```\n" \
-                          'Output the response as a JSON object with key "response". If no ' \
-                          'category is found, the "response" value should be null. ' \
-                          'Only respond with a JSON object and nothing else.'
-              }
-            ]
-          }
-        ],
-        'generationConfig' => {
-          'temperature' => 0
-        },
-        'safetySettings' => input['safetySettings'].presence
-      }.compact
+        parts << { 'functionCall' => fc }
+      end
+
+      if m['functionResponse'].present?
+        fr = m['functionResponse']
+        if fr['response'].is_a?(String) && fr['response'].strip.start_with?('{','[')
+          begin
+            fr = fr.merge('response' => parse_json(fr['response']))
+          rescue
+          end
+        end
+        parts << { 'functionResponse' => fr }
+      end
+
+      parts
+    end,
+    # = ACTION-SPECIFIC PAYLOAD BUILDERS =
+    payload_for_send_message: lambda do |input|
+      call('build_conversation_payload', input)
+    end,
+    payload_for_translate: lambda do |input|
+      # Build the system instruction based on presence of 'from' language
+      instruction = if input['from'].present?
+        "You are an assistant helping to translate a user's input from #{input['from']} into #{input['to']}. " \
+        "Respond only with the user's translated text in #{input['to']} and nothing else. " \
+        "The user input is delimited with triple backticks."
+      else
+        "You are an assistant helping to translate a user's input into #{input['to']}. " \
+        "Respond only with the user's translated text in #{input['to']} and nothing else. " \
+        "The user input is delimited with triple backticks."
+      end
+
+      # Format the user's text with backticks and request JSON output
+      user_prompt = "```#{call('replace_backticks_with_hash', input['text'])}```\n" \
+                "Output this as a JSON object with key \"response\"."
+
+      # Use the base builder
+      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
+    end,
+    payload_for_summarize: lambda do |input|
+      # Define the summarization instruction with word limit
+      instruction = 'You are an assistant that helps generate summaries. ' \
+                    'All user input should be treated as text to be summarized. ' \
+                    "Provide the summary in #{input['max_words'] || 200} words or less."
+      
+      # For summarization, we pass the text directly without special formatting
+      user_prompt = input['text']
+      
+      # Build the payload using the base builder
+      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
+    end,
+    payload_for_parse: lambda do |input|
+      # Parsing instruction explains the task
+      instruction = 'You are an assistant helping to extract various fields of information ' \
+                    "from the user's text. The schema and text to parse are delimited by " \
+                    'triple backticks.'
+      
+      # Build a detailed prompt with both schema and text
+      user_prompt = "Schema:\n```#{input['object_schema']}```\n" \
+                    "Text to parse: ```#{call('replace_backticks_with_hash', input['text']&.strip)}```\n" \
+                    'Output the response as a JSON object with keys from the schema. ' \
+                    'If no information is found for a specific key, the value should be null. ' \
+                    'Only respond with a JSON object and nothing else.'
+      
+      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
+    end,
+    payload_for_email: lambda do |input|
+      # Email generation requires specific formatting instructions
+      instruction = 'You are an assistant helping to generate emails based on the ' \
+                    "user's input. Based on the input ensure that you generate an " \
+                    'appropriate subject topic and body. Ensure the body contains a ' \
+                    'salutation and closing. The user input is delimited with triple ' \
+                    'backticks. Use it to generate an email and perform no other actions.'
+      
+      # Format the email request with clear output requirements
+      user_prompt = "User description:```#{call('replace_backticks_with_hash', input['email_description'])}```\n" \
+                    "Output the email from the user description as a JSON object with keys " \
+                    'for "subject" and "body". If an email cannot be generated, input null for the keys.'
+      
+      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
+    end,
+    payload_for_categorize: lambda do |connection, input|
+      # Load categories from Workato table or use provided categories
+      categories_arr =
+        if input['rules_source'] == 'workato_table'
+          call('load_categories_from_table', connection, input) # explicitly pass connection
+        else
+          (input['categories'] || []).map { |c| c['rule'].present? ? "#{c['key']} - #{c['rule']}" : c['key'].to_s }
+        end
+      categories_text = categories_arr&.join("\n") # use newline, not \n in str
+      
+      # Build instruction based on the existence of rules
+      instruction = if input['rules_source'] != 'workato_table' && 
+                      input['categories'].present? && 
+                      input['categories'].all? { |c| c['rule'].present? }
+        'You are an assistant helping to categorize text into the various categories mentioned. ' \
+        'Respond with only the category name. The categories and text to classify are delimited ' \
+        'by triple backticks. The category information is provided as "Category name: Rule". ' \
+        'Use the rule to classify the text appropriately into one single category.'
+      else
+        'You are an assistant helping to categorize text into the various categories mentioned. ' \
+        'Respond with only one category name. The categories and text to classify are delimited ' \
+        'by triple backticks.'
+      end
+
+      # Build the categorization prompt
+      user_prompt = "Categories:\n```#{categories_text}```\n" \
+                    "Text to classify: ```#{call('replace_backticks_with_hash', input['text']&.strip)}```\n" \
+                    'Output the response as a JSON object with key "response". ' \
+                    'If no category is found, the "response" value should be null. ' \
+                    'Only respond with a JSON object and nothing else.'
+      
+      # Use the base payload builder
+      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
     end,
     payload_for_analyze: lambda do |input|
-      {
-        'systemInstruction' => {
-          'role' => 'model',
-          'parts' => [
-            {
-              'text' => 'You are an assistant helping to analyze the provided information. ' \
-                        'Take note to answer only based on the information provided and nothing ' \
-                        'else. The information to analyze and query are delimited by triple ' \
-                        'backticks.'
-            }
-          ]
-        },
-        'contents' => [
-          {
-            'role' => 'user',
-            'parts' => [
-              {
-                'text' => 'Information to analyze:```' \
-                          "#{call('replace_backticks_with_hash', input['text'])}```\n" \
-                          "Query:```#{call('replace_backticks_with_hash', input['question'])}" \
-                          "```\nIf you don't understand the question or the answer isn't in " \
-                          'the information to analyze, input the value as null for "response". ' \
-                          'Only return a JSON object.'
-              }
-            ]
-          }
-        ],
-        'generationConfig' => {
-          'temperature' => 0
-        },
-        'safetySettings' => input['safetySettings'].presence
-      }.compact
+      # Analysis requires staying within provided information
+      instruction = 'You are an assistant helping to analyze the provided information. ' \
+                    'Take note to answer only based on the information provided and nothing else. ' \
+                    'The information to analyze and query are delimited by triple backticks.'
+      
+      # Format both the text and question clearly
+      user_prompt = "Information to analyze:```#{call('replace_backticks_with_hash', input['text'])}```\n" \
+                    "Query:```#{call('replace_backticks_with_hash', input['question'])}```\n" \
+                    "If you don't understand the question or the answer isn't in the " \
+                    'information to analyze, input the value as null for "response". ' \
+                    'Only return a JSON object.'
+      
+      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
     end,
     payload_for_analyze_image: lambda do |input|
+      # We can't use the base builder since we have to pass image data in parts
       {
         'contents' => [
           {
@@ -1249,6 +1725,114 @@
         'returnFullDatapoint'  => !!input['returnFullDatapoint']
       }.compact
     end,
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # -- Response extraction and normalization
+    # ─────────────────────────────────────────────────────────────────────────────
+    extract_json: lambda do |resp|
+      json_txt = resp&.dig('candidates', 0, 'content', 'parts', 0, 'text')
+      return {} if json_txt.blank?
+
+      # Cleanup markdown code blocks
+      json = json_txt.gsub(/^```(?:json|JSON)?\s*\n?/, '')  # Remove opening fence
+                    .gsub(/\n?```\s*$/, '')                # Remove closing fence
+                    .gsub(/`+$/, '')                       # Remove any trailing backticks
+                    .strip
+
+      begin
+        parse_json(json) || {}
+      rescue => e
+        # Log error for debugging, but return empty hash to prevent action failure
+        puts "JSON parsing failed: #{e.message}. Raw text: #{json_txt}"
+        {}
+      end
+    end,
+    get_safety_ratings: lambda do |ratings|
+      {
+        'sexually_explicit' =>
+          ratings&.find do |r|
+            r['category'] == 'HARM_CATEGORY_SEXUALLY_EXPLICIT'
+          end&.[]('probability'),
+        'hate_speech' =>
+          ratings&.find { |r| r['category'] == 'HARM_CATEGORY_HATE_SPEECH' }&.[]('probability'),
+        'harassment' =>
+          ratings&.find { |r| r['category'] == 'HARM_CATEGORY_HARASSMENT' }&.[]('probability'),
+        'dangerous_content' =>
+          ratings&.find do |r|
+            r['category'] == 'HARM_CATEGORY_DANGEROUS_CONTENT'
+          end&.[]('probability')
+      }
+    end,
+    check_finish_reason: lambda do |reason|
+      case reason&.downcase
+      when 'finish_reason_unspecified'
+        error 'ERROR - The finish reason is unspecified.'
+      when 'other'
+        error 'ERROR - Token generation stopped due to an unknown reason.'
+      when 'max_tokens'
+        error 'ERROR - Token generation reached the configured maximum output tokens.'
+      when 'safety'
+        error 'ERROR - Token generation stopped because the content potentially contains ' \
+              'safety violations.'
+      when 'recitation'
+        error 'ERROR - Token generation stopped because the content potentially contains ' \
+              'copyright violations.'
+      when 'blocklist'
+        error 'ERROR - Token generation stopped because the content contains forbidden items.'
+      when 'prohibited_content'
+        error 'ERROR - Token generation stopped for potentially containing prohibited content.'
+      when 'spii'
+        error 'ERROR - Token generation stopped because the content potentially contains ' \
+              'Sensitive Personal Identifiable Information (SPII).'
+      when 'malformed_function_call'
+        error 'ERROR - The function call generated by the model is invalid.'
+      end
+    end,
+    extract_generic_response: lambda do |resp, is_json_response|
+      call('check_finish_reason', resp.dig('candidates', 0, 'finishReason'))
+      ratings = call('get_safety_ratings', resp.dig('candidates', 0, 'safetyRatings'))
+      return({ 'answer' => 'N/A', 'safety_ratings' => {} }) if ratings.blank?
+
+      answer = if is_json_response
+                call('extract_json', resp)&.[]('response')
+              else
+                resp&.dig('candidates', 0, 'content', 'parts', 0, 'text')
+              end
+      {
+        'answer' => answer,
+        'safety_ratings' => ratings,
+        'usage' => resp['usageMetadata']
+      }
+    end,
+    extract_generated_email_response: lambda do |resp|
+      call('check_finish_reason', resp.dig('candidates', 0, 'finishReason'))
+      ratings = call('get_safety_ratings', resp.dig('candidates', 0, 'safetyRatings'))
+      json = call('extract_json', resp)
+      {
+        'subject' => json&.[]('subject'),
+        'body' => json&.[]('body'),
+        'safety_ratings' => ratings,
+        'usage' => resp['usageMetadata']
+      }
+    end,
+    extract_parsed_response: lambda do |resp|
+      call('check_finish_reason', resp.dig('candidates', 0, 'finishReason'))
+      ratings = call('get_safety_ratings', resp.dig('candidates', 0, 'safetyRatings'))
+      json = call('extract_json', resp)
+      json&.each_with_object({}) do |(key, value), hash|
+        hash[key] = value
+      end&.merge('safety_ratings' => ratings,
+                 'usage' => resp['usageMetadata'])
+    end,
+    extract_embedding_response: lambda do |resp|
+      vals = resp&.dig('predictions', 0, 'embeddings', 'values') ||
+            resp&.dig('predictions', 0, 'embeddings')&.first&.dig('values') ||
+            []
+      { 'embedding' => vals.map { |v| { 'value' => v } } }
+    end,
+ 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # -- Samples and UX helpers
     sample_record_output: lambda do |input|
       case input
       when 'send_message'
@@ -1375,367 +1959,6 @@
           hash[element['name'].gsub(/^\d|\W/) { |c| "_ #{c.unpack('H*')}" }] = '<Sample Text>'
         end
       end || {}
-    end,
-    # --- Dynamic Model Discovery for Vertex AI (Model Garden/Publisher models) ---
-    fetch_publisher_models: lambda do |connection, publisher = 'google'|
-      # Use the regional service endpoint; list is in v1beta1.
-      # Docs: publishers.models.list (v1beta1), supports 'view' and pagination.
-      # https://cloud.google.com/vertex-ai/docs/reference/rest/v1beta1/publishers.models/list
-      region = connection['region'].presence || 'us-central1'
-      host   = "https://#{region}-aiplatform.googleapis.com"
-      url    = "#{host}/v1beta1/publishers/#{publisher}/models"
-
-      models = []
-      page_token = nil
-      max_pages = 10 # safety to avoid infinite loops
-      page_count = 0
-
-      begin
-        loop do
-          page_count += 1
-          if page_count > max_pages
-            puts "Warning: Reached maximum page limit (#{max_pages}) for model listing"
-            break
-          end
-
-          resp = get(url)
-                  .params(
-                    page_size: 200,
-                    page_token: page_token,
-                    view: 'PUBLISHER_MODEL_VIEW_FULL', # include launchStage/versionState, etc.
-                    list_all_versions: true
-                  )
-                  .after_error_response(/.*/) do |code, body, _hdrs, message|
-                    # For discovery, we log and return empty instead of erroring
-                    if connection['verbose_errors']
-                      puts "Model listing failed (HTTP #{code}): #{body}"
-                    else
-                      puts "Model listing failed (HTTP #{code})"
-                    end
-                    raise "API Error" # This gets caught below
-                  end
-
-          batch = resp['publisherModels'] || []
-          models.concat(batch)
-
-          new_page_token = resp['nextPageToken']
-          # Check for stuck pagination
-          if new_page_token == page_token
-            puts "Warning: Pagination stuck with same token"
-            break
-          end
-          
-          page_token = new_page_token
-          break if page_token.blank? || batch.empty?
-        end
-      rescue => e
-        puts "Failed to fetch dynamic models: #{e.message}. Using static list."
-        models = []
-      end
-
-      models
-    end,
-    # Very light heuristics to partition models by capability.
-    vertex_model_bucket: lambda do |model_id|
-      id = model_id.to_s.downcase
-      return :embedding if id.include?('embedding') || id.include?('gecko') || id.include?('multimodalembedding') || id.include?('embeddinggemma')
-      return :image     if id.include?('vision') || id.include?('imagegeneration') || id.include?('imagen')
-      return :tts       if id.include?('tts') || id.include?('audio')
-      :text
-    end,
-    # Filter/sort + convert to picklist options [label, value]
-    to_model_options: lambda do |models, bucket:, include_preview: false|
-      # Prefer GA and stable versions unless explicitly asked to include preview.
-      filtered = models.select do |m|
-        id = m['name'].to_s.split('/').last
-        next false if id.blank?
-
-        # Drop retired lines that frequently 404
-        next false if id =~ /(^|-)1\.0-|text-bison|chat-bison/
-
-        # Bucket by id heuristics
-        next false unless call('vertex_model_bucket', id) == bucket
-
-        # GA filter (launchStage lives on v1 PublisherModel too)
-        stage = (m['launchStage'] || '').to_s
-        include_preview || stage == 'GA' || stage.blank? # keep if GA or unknown when preview is off
-      end
-
-      # make ids unique by name
-      ids = filtered.map { |m| m['name'].to_s.split('/').last }.compact.uniq
-
-      options = ids.map do |id|
-        label = id.gsub('-', ' ').split.map { |t| t =~ /\d/ ? t : t.capitalize }.join(' ')
-        [label, "publishers/google/models/#{id}"]
-      end
-
-      # Sort: 2.5 > 2.0 > 1.5 ; Pro > Flash > Lite ; then lexicographic
-      options.sort_by do |label, _|
-        [
-          (label[/\b2\.5\b/] ? 0 : label[/\b2\.0\b/] ? 1 : label[/\b1\.5\b/] ? 2 : 3),
-          (label[/\bPro\b/] ? 0 : label[/\bFlash\b/] ? 1 : label[/\bLite\b/] ? 2 : 3),
-          label
-        ]
-      end
-    end,
-    # High-level API used by pick_lists. Falls back to your static lists when listing is off or fails.
-    dynamic_model_picklist: lambda do |connection, bucket, static_fallback|
-      # respect the toggle
-      unless connection['dynamic_models']
-        next static_fallback
-      end
-
-      models = call('fetch_publisher_models', connection, 'google')
-      if models.present?
-        opts = call('to_model_options', models,
-                    bucket: bucket,
-                    include_preview: connection['include_preview_models'])
-        opts.presence || static_fallback
-      else
-        static_fallback
-      end
-    end,
-    # Preflight validation for model before run (cheap + region-aware) ---
-    validate_publisher_model!: lambda do |connection, model_name|
-      return if model_name.blank?
-      return unless connection['validate_model_on_run']
-
-      # Validate model name format
-      unless model_name.match?(/^publishers\/[^\/]+\/models\/[^\/]+$/)
-        error("Invalid model name format: #{model_name}\n" \
-              "Expected format: publishers/{publisher}/models/{model}")
-      end
-
-      region = connection['region'].presence || 'us-central1'
-      url = "https://#{region}-aiplatform.googleapis.com/v1/#{model_name}"
-
-      begin
-        resp = get(url)
-                .params(view: 'PUBLISHER_MODEL_VIEW_FULL')
-                .after_error_response(/404/) do |code, body, _hdrs, message|
-                  # Specific message for model not found
-                  error("Model '#{model_name}' not found in region '#{region}'.\n" \
-                        "Please check:\n" \
-                        "• Model name spelling\n" \
-                        "• Region availability\n" \
-                        "• Model deprecation status")
-                end
-                .after_error_response(/403/) do |code, body, _hdrs, message|
-                  error("Access denied to model '#{model_name}'. Please check your project permissions.")
-                end
-                .after_error_response(/.*/) do |code, body, _hdrs, message|
-                  call('handle_vertex_error', connection, code, body, message)
-                end
-
-        # Enforce GA unless preview is explicitly allowed
-        unless connection['include_preview_models']
-          stage = resp['launchStage'].to_s
-          if stage.present? && stage != 'GA'
-            error("Model '#{model_name}' is not Generally Available (launchStage=#{stage}). " \
-                  "Enable 'Include preview/experimental models' in connection settings to use this model.")
-          end
-        end
-
-        true
-      rescue => e
-        error("Failed to validate model: #{e.message}")
-      end
-    end,
-    handle_vertex_error: lambda do |connection, code, body, message, context = {}|
-      # Parse the body for structured error information
-      error_details = begin
-        parsed = parse_json(body)
-        # Google APIs often nest the error message
-        parsed.dig('error', 'message') || parsed['message'] || body
-      rescue
-        body
-      end
-      
-      # Build base message based on status code
-      base_message = case code
-      when 400
-        "Invalid request format"
-      when 401
-        "Authentication failed - please check your credentials"
-      when 403
-        "Permission denied - verify Vertex AI API is enabled"
-      when 404
-        "Resource not found"
-      when 429
-        "Rate limit exceeded - please wait before retrying"
-      when 500
-        "Google service error - temporary issue"
-      when 502, 503, 504
-        "Google service temporarily unavailable"
-      else
-        "API error"
-      end
-      
-      # Add context if provided
-      if context[:action].present?
-        base_message = "#{context[:action]} failed: #{base_message}"
-      end
-      
-      # Build final message
-      if connection['verbose_errors']
-        error_message = "#{base_message} (HTTP #{code})"
-        error_message += "\nDetails: #{error_details}" if error_details.present?
-        error_message += "\nOriginal: #{message}" if message != error_details
-        error(error_message)
-      else
-        hint = case code
-        when 401, 403
-          "\nEnable verbose errors in connection settings for details"
-        when 429
-          "\nConsider adding delays between requests"
-        when 500..599
-          "\nThis is usually temporary - retry in a few moments"
-        else
-          ""
-        end
-        error("#{base_message}#{hint}")
-      end
-    end,
-    # --- Workato Data Table integration for Categorize action ---
-    ensure_workato_api!: lambda do |connection|
-      missing = []
-      # host is optional (defaults to https://www.workato.com)
-      missing << 'workato_api_token' if connection['workato_api_token'].blank?
-      error("To use 'Workato data table' as rules source, please configure connection fields: #{missing.join(', ')}") if missing.present?
-    end,
-    workato_api_headers: lambda do |connection|
-      {
-        'Authorization' => "Bearer #{connection['workato_api_token']}",
-        'Content-Type'  => 'application/json'
-      }
-    end,
-    workato_api_base: lambda do |connection|
-      host = connection['workato_api_host'].presence || 'https://app.workato.com'
-      host.gsub(%r{/\z}, '')
-    end,
-    list_datatables: lambda do |connection|
-      call('ensure_workato_api!', connection)
-      base = call('workato_api_base', connection)
-
-      get("#{base}/api/v1/tables")
-        .headers(call('workato_api_headers', connection))
-        .after_error_response(/401/) do |code, body, _h, msg|
-          error("Workato API authentication failed. Please check your API token.")
-        end
-        .after_error_response(/.*/) do |code, body, _h, msg|
-          # Provide context about which API failed
-          if connection['verbose_errors']
-            error("Workato API error (HTTP #{code}): #{body}")
-          else
-            error("Failed to list Workato data tables (HTTP #{code})")
-          end
-        end
-    end,
-    list_datatable_columns: lambda do |connection, table_id|
-      call('ensure_workato_api!', connection)
-      base = call('workato_api_base', connection)
-      
-      get("#{base}/api/v1/tables/#{table_id}").
-        headers(call('workato_api_headers', connection)).
-        after_error_response(/404/) do |code, body, _h, msg|
-          error("Data table '#{table_id}' not found")
-        end.
-        after_error_response(/.*/) do |code, body, _h, msg|
-          if connection['verbose_errors']
-            error("Workato API error (HTTP #{code}): #{body}")
-          else
-            error("Failed to get table structure (HTTP #{code})")
-          end
-        end
-    end,
-    fetch_datatable_rows: lambda do |connection, table_id, limit = 1000|
-      call('ensure_workato_api!', connection)
-      base = call('workato_api_base', connection)
-      headers = call('workato_api_headers', connection)
-      rows = []
-      token = nil
-      # Use records/query with paging by continuation_token
-      loop do
-        body = {
-          select: nil,            # nil = all columns
-          where:  nil,            # nil = no filter
-          order:  nil,
-          limit:  [200, limit - rows.length].min,
-          continuation_token: token
-        }.compact
-        resp = post("#{base}/api/v1/tables/#{table_id}/records/query", body)
-                 .headers(headers)
-                 .after_error_response(/.*/) { |code, body_s, _h, msg| error("Query rows failed (HTTP #{code}) - #{msg}: #{body_s}") }
-        batch = resp['records'] || resp['data'] || []  # tolerate doc shape drift
-        rows.concat(batch)
-        token = resp['continuation_token']
-        break if token.blank? || rows.length >= limit || batch.empty?
-      end
-      rows
-    end,
-    load_categories_from_table: lambda do |input|
-      # Minimal validation; if connection creds aren’t present we error in ensure_workato_api!
-      rules_table_id  = input['rules_table_id'].to_s.strip
-      category_column = input['category_column'].to_s.strip
-      rule_column     = input['rule_column'].to_s.strip
-      error('Data table is required.') if rules_table_id.blank?
-      error('Category column is required.') if category_column.blank?
-
-      # connection not passed here; Workato provides it to execute/payload via closure binding
-      connection = connection() # SDK helper; current connection hash
-      
-      # Fetch table metadata first to validate columns
-      begin
-        table_info = call('list_datatable_columns', connection, rules_table_id)
-        columns = table_info['columns'] || table_info.dig('data_table', 'columns') || []
-        column_names = columns.map { |c| c['name'] }
-        
-        # Validate required columns exist
-        unless column_names.include?(category_column)
-          error("Category column '#{category_column}' not found in table. Available columns: #{column_names.join(', ')}")
-        end
-        
-        if rule_column.present? && !column_names.include?(rule_column)
-          error("Rule column '#{rule_column}' not found in table. Available columns: #{column_names.join(', ')}")
-        end
-        
-        if input['only_active'] && input['active_column'].present?
-          active_col = input['active_column']
-          unless column_names.include?(active_col)
-            error("Active column '#{active_col}' not found in table. Available columns: #{column_names.join(', ')}")
-          end
-        end
-      rescue => e
-        error("Failed to validate table structure: #{e.message}")
-      end
-      
-      # Fetch rows with validated columns
-      rows = call('fetch_datatable_rows', connection, rules_table_id, 2000)
-
-      # Apply active filter if specified
-      if input['only_active'] && input['active_column'].present?
-        active_col = input['active_column']
-        rows = rows.select { |r| !!r[active_col] }
-      end
-
-      # Build categories list with validation
-      categories = rows.map do |r|
-        key = r[category_column]
-        next nil if key.blank?
-        
-        if rule_column.present?
-          rule = r[rule_column]
-          rule.present? ? "#{key} - #{rule}" : key.to_s
-        else
-          key.to_s
-        end
-      end.compact.uniq
-      
-      if categories.empty?
-        error("No valid categories found in the table. Please check your data and column mappings.")
-      end
-      
-      categories
     end
 
   },
@@ -2729,7 +2952,7 @@
             extends_schema: true,
             ngIf: 'input.model != "publishers/google/models/textembedding-gecko@001"',
             control_type: 'select',
-            pick_list: 'embedding_task_list',
+            pick_list: :embedding_task_list,
             hint: 'Provide the intended downstream application to help the model produce ' \
                   'better embeddings. If left blank, defaults to Retrieval query.',
             toggle_hint: 'Select from list',
@@ -3057,21 +3280,51 @@
       ]
     end,
     workato_datatables: lambda do |connection|
+      # Return empty if no API token configured
+      if connection['workato_api_token'].to_s.strip.blank?
+        puts "Workato API token not configured; returning empty datatable list"
+        return []
+      end
+
       begin
-        resp = call('list_datatables', connection)
-        tables = resp['data_tables'] || resp # API may return array directly
-        Array(tables).map { |t| [t['name'].presence || t['id'], t['id']] }
-      rescue StandardError
-        []
+        tables = call('get_cached_datatables', connection)
+        
+        # Sort tables alphabetically for better UX
+        tables.
+          sort_by { |t| t['name'].to_s.downcase }.
+          map { |t| [t['name'].presence || "Table #{t['id']}", t['id']] }
+      rescue => e
+        puts "Failed to load datatables: #{e.message}"
+        []  # Return empty array on error to prevent action failure
       end
     end,
     workato_datatable_columns: lambda do |connection, table_id:|
+      # Return empty if no API token configured
       return [] if table_id.blank?
+      if connection['workato_api_token'].to_s.strip.blank?
+        puts "Workato API token not configured; returning empty column list"
+        return []
+      end
+      
       begin
-        t = call('list_datatable_columns', connection, table_id)
-        cols = t['columns'] || t.dig('data_table', 'columns') || []
-        cols.map { |c| [c['name'], c['name']] }
-      rescue StandardError
+        columns = call('get_cached_table_columns', connection, table_id)
+        
+        # Group columns by type for better organization
+        grouped = columns.group_by { |c| c['type'] || 'unknown' }
+        
+        # Build sorted list with type indicators
+        result = []
+        ['string', 'boolean', 'integer', 'number', 'datetime'].each do |type|
+          if grouped[type].present?
+            grouped[type].
+              sort_by { |c| c['name'].to_s.downcase }.
+              each { |c| result << ["#{c['name']} (#{type})", c['name']] }
+          end
+        end
+        
+        result
+      rescue => e
+        puts "Failed to load columns for table #{table_id}: #{e.message}"
         []
       end
     end
