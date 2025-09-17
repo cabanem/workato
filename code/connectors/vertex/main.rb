@@ -510,6 +510,7 @@
         call('sample_record_output', 'analyze_text')
       end
     },
+    # --- Generative and Analysis actions (multimodal models) ---
     analyze_image: {
       title: 'Analyze image',
       subtitle: 'Analyze image based on the provided question',
@@ -543,6 +544,7 @@
         call('sample_record_output', 'analyze_image')
       end
     },
+    # --- Embedding and Vector Search actions ---
     generate_embedding: {
       title: 'Generate text embedding',
       subtitle: 'Generate text embedding for the input text',
@@ -605,18 +607,42 @@
         payload = call('payload_for_find_neighbors', input)
 
         host = input['index_endpoint_host'].to_s.strip
-        host = host.gsub(%r{\Ahttps?://}, '').gsub(%r{/\z}, '')
-        error('Index endpoint host is required') if host.blank?
 
-        url = "https://#{host}/#{connection['version'] || 'v1'}/" \
-              "projects/#{connection['project']}/locations/#{connection['region']}/" \
-              "indexEndpoints/#{input['index_endpoint_id']}:findNeighbors"
+        # Host normalization
+        if host.blank?
+          error('Index endpoint host is required')
+        end
+        
+        # Remove protocol if present and trailing slashes
+        host = host.gsub(/^https?:\/\//i, '').gsub(/\/+$/, '')
+        
+        # Validate host format (basic check for valid domain or IP)
+        unless host.match?(/^[\w\-\.]+(:\d+)?$/)
+          error("Invalid index endpoint host format: #{host}")
+        end
+
+        version = connection['version'].presence || 'v1'
+        project = connection['project']
+        region = connection['region']
+        endpoint_id = input['index_endpoint_id']
+        
+        # Validate required parameters
+        error('Project is required') if project.blank?
+        error('Region is required') if region.blank?
+        error('Index endpoint ID is required') if endpoint_id.blank?
+
+        url = "https://#{host}/#{version}/projects/#{project}/locations/#{region}/" \
+              "indexEndpoints/#{endpoint_id}:findNeighbors"
 
         post(url, payload).
+          after_error_response(/404/) do |code, body, _headers, message|
+            error("Index endpoint not found. Please verify the host (#{host}) and endpoint ID (#{endpoint_id})")
+          end.
+          after_error_response(/400/) do |code, body, _headers, message|
+            error("Invalid request format: #{message}. Response: #{body}")
+          end.
           after_error_response(/.*/) do |code, body, _headers, message|
-            # Common pitfalls: wrong host (e.g. hitting REGION-aiplatform host) or bad query shape
-            # Surface exact upstream error for troubleshooting
-            error("Vertex AI Vector Search error (HTTP #{code}) - #{message}: #{body}")
+            error("Vector Search error (HTTP #{code}): #{message}")
           end
       end,
 
@@ -655,6 +681,7 @@
         }
       end
     },
+    # --- Legacy Text Bison action kept for backward compatibility ---
     get_prediction: {
       title: 'Get prediction',
       subtitle: 'Get prediction in Google Vertex AI',
