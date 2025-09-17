@@ -829,81 +829,72 @@
       end }
     end,
     payload_for_send_message: lambda do |input|
+      # Handle generation config with response schema
       if input&.dig('generationConfig', 'responseSchema').present?
         parsed = parse_json(input.dig('generationConfig', 'responseSchema'))
-        input['generationConfig'] = input['generationConfig']&.map do |key, value|
-          if key == 'responseSchema'
-            { key => parsed }
-          else
-            { key => value }
-          end
-        end&.inject(:merge)
+        input['generationConfig']['responseSchema'] = parsed
       end
 
+      # Handle tools with function declarations
       if input['tools'].present?
-        input['tools']&.map do |tool|
+        input['tools'] = input['tools'].map do |tool|
           if tool['functionDeclarations'].present?
-            tool['functionDeclarations']&.map do |function|
+            tool['functionDeclarations'] = tool['functionDeclarations'].map do |function|
               if function['parameters'].present?
                 function['parameters'] = parse_json(function['parameters'])
               end
               function
-            end&.compact
+            end.compact
           end
           tool
-        end&.compact
+        end.compact
       end
 
       messages = input['messages']
       input['contents'] = if input['message_type'] == 'single_message'
-                            [
-                              {
-                                'role' => 'user',
-                                'parts' => [
-                                  {
-                                    'text' => messages['message']
-                                  }
-                                ].compact
-                              }
-                            ]
-                          else
-                            messages&.[]('chat_transcript')&.map do |m|
-                              {
-                                'role' => m['role'],
-                                'parts' => [
-                                  {
-                                    'text' => m['text']
-                                  }.compact.presence,
-                                  {
-                                    'fileData' => m['fileData']
-                                  }.compact.presence,
-                                  {
-                                    'inlineData' => m['inlineData']
-                                  }.compact.presence,
-                                  {
-                                    'functionCall' => m['functionCall']&.map do |key, value|
-                                      if key == 'args'
-                                        { key => parse_json(value) }
-                                      else
-                                        { key => value }
-                                      end
-                                    end&.inject(:merge)
-                                  }.compact.presence,
-                                  {
-                                    'functionResponse' => m['functionResponse']&.map do |key, value|
-                                      if key == 'response'
-                                        { key => parse_json(value) }
-                                      else
-                                        { key => value }
-                                      end
-                                    end&.inject(:merge)
-                                  }.compact.presence
-                                ].compact
-                              }.compact
-                            end
-                          end
-      input.except('model', 'message_type', 'messages', 'fileData', 'inlineData',
-                   'functionResponse')
+        [
+          {
+            'role' => 'user',
+            'parts' => [
+              { 'text' => messages['message'] }
+            ]
+          }
+        ]
+      else
+        messages&.[]('chat_transcript')&.map do |m|
+          # Build parts array with only non-empty elements
+          parts = []
+          
+          parts << { 'text' => m['text'] } if m['text'].present?
+          
+          parts << { 'fileData' => m['fileData'] } if m['fileData'].present?
+          
+          parts << { 'inlineData' => m['inlineData'] } if m['inlineData'].present?
+          
+          if m['functionCall'].present?
+            parts << {
+              'functionCall' => m['functionCall'].map do |key, value|
+                key == 'args' ? { key => parse_json(value) } : { key => value }
+              end.inject(:merge)
+            }
+          end
+          
+          if m['functionResponse'].present?
+            parts << {
+              'functionResponse' => m['functionResponse'].map do |key, value|
+                key == 'response' ? { key => parse_json(value) } : { key => value }
+              end.inject(:merge)
+            }
+          end
+          
+          {
+            'role' => m['role'],
+            'parts' => parts
+          }
+        end
+      end
+      
+      input.except('model', 'message_type', 'messages', 'fileData', 'inlineData', 'functionResponse')
     end,
     payload_for_translate: lambda do |input|
       {
