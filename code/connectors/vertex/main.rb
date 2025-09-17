@@ -10,15 +10,28 @@
 
   connection: {
     fields: [
-      { name: 'auth_type', control_type: 'select',
-        label: 'Authentication type', default: 'custom',
-        optional: false, extends_schema: true,
-        pick_list: [
-          ['Client credentials', 'custom'],
-          %w[OAuth2 oauth2]
-        ] },
-      { name: 'region',
-        control_type: 'select',
+      # Developer options
+      { # - verbose_errors
+        name: 'verbose_errors', label: 'Verbose errors',
+        group: 'Developer options',
+        type: 'boolean', control_type: 'checkbox',
+        hint: 'When enabled, include upstream response bodies in error messages. Disable in production.'
+      },
+      # Authentication
+      { # - auth_type
+        name: 'auth_type', label: 'Authentication type', group: 'Authentication',
+        control_type: 'select', 
+        default: 'custom',
+        optional: false, 
+        extends_schema: true, 
+        hint: 'Select the authentication type for connecting to Google Vertex AI.',
+        options: [ ['Client credentials', 'custom'], %w[OAuth2 oauth2] ] 
+      },
+      # Vertex AI environment
+      { # - region
+        name: 'region', label: 'Region', group: 'Vertex AI environment',
+        control_type: 'select', 
+        optional: false,
         options: [
           ['US central 1', 'us-central1'],
           ['US east 1', 'us-east1'],
@@ -37,7 +50,6 @@
           ['Asia northeast 3', 'asia-northeast3'],
           ['Asia southeast 1', 'asia-southeast1']
         ],
-        optional: false,
         hint: 'Select the Google Cloud Platform (GCP) region used for the Vertex model.',
         toggle_hint: 'Select from list',
         toggle_field: {
@@ -52,44 +64,50 @@
                 "target='_blank'>generative AI on Vertex AI locations</a> for a list " \
                 'of regions and model availability.'
 
-        } },
-      { name: 'project',
-        optional: false,
-        hint: 'E.g abc-dev-1234' },
-      { name: 'version',
-        optional: false,
+        }
+        
+      },
+      { # - project
+        name: 'project', label: 'Project', group: 'Vertex AI environment',
+        optional: false, 
+        hint: 'E.g abc-dev-1234'
+      },
+      { # - version
+        name: 'version', label: 'Version', group: 'Vertex AI environment',
+        optional: false, 
         default: 'v1',
-        hint: 'E.g. v1beta1' },
-      { name: 'dynamic_models',
-        label: 'Refresh model list from API (Model Garden)',
-        type: 'boolean', control_type: 'checkbox', optional: true,
-        hint: 'Fetch available Gemini/Embedding models at runtime. Falls back to a curated static list on errors.' },
-      { name: 'include_preview_models',
-        label: 'Include preview/experimental models',
-        type: 'boolean', control_type: 'checkbox', optional: true, sticky: true,
-        hint: 'Also include Experimental/Private/Public Preview models. Leave unchecked for GA-only in production.' },
-      { name: 'validate_model_on_run',
-        label: 'Validate model before run',
-        type: 'boolean', control_type: 'checkbox', optional: true, sticky: true,
+        hint: 'E.g. v1beta1'
+      },
+      # Model discovery and validation
+      { # - dynamic_models
+        name: 'dynamic_models', label: 'Refresh model list from API (Model Garden)', group: 'Model discovery and validation',
+        type: 'boolean',
+        control_type: 'checkbox',
+        optional: true,
+        hint: 'Fetch available Gemini/Embedding models at runtime. Falls back to a curated static list on errors.' 
+      },
+      { # - include_preview_models
+        name: 'include_preview_models', label: 'Include preview/experimental models', group: 'Model discovery and validation',
+        type: 'boolean',
+        control_type: 'checkbox', 
+        optional: true, 
+        sticky: true,
+        hint: 'Also include Experimental/Private/Public Preview models. Leave unchecked for GA-only in production.' 
+      },
+      { # - validate_model_on_run
+        name: 'validate_model_on_run', label: 'Validate model before run', group: 'Model discovery and validation',
+        type: 'boolean', control_type: 'checkbox', optional: true, sticky: true, 
         hint: 'Pre-flight check the chosen model and your project access before sending the request. Recommended.' },
-      {
-        name: 'workato_api_host',
-        label: 'Workato API host',
-        hint: 'Base URL for the Workato Developer API. Defaults to https://www.workato.com',
+      # Workato Developer API for dynamic picklists
+      { # - workato_api_host
+        name: 'workato_api_host', label: 'Workato API host', group: 'Workato Developer API',
+        hint: 'Base URL for the Workato Developer API. Defaults to https://app.eu.workato.com',
         optional: true,
-        default: 'https://www.workato.com',
+        default: 'https://app.eu.workato.com',
         sticky: true
       },
-      {
-        name: 'workato_account_id',
-        label: 'Workato account ID',
-        hint: 'Required for listing data tables. Find it in your account URL or Profile → Account.',
-        optional: true,
-        sticky: true
-      },
-      {
-        name: 'workato_api_token',
-        label: 'Workato API token',
+      { # - workato_api_token
+        name: 'workato_api_token', label: 'Workato API token', group: 'Workato Developer API',
         control_type: 'password',
         hint: 'Personal access token with Data Tables read scope. Optional, but needed for dynamic table/column picklists.',
         optional: true,
@@ -107,9 +125,9 @@
       options: {
         oauth2: {
           type: 'oauth2',
-
           fields: [
-            { name: 'client_id',
+            { # - client_id
+              name: 'client_id', group: 'OAuth 2.0 (user delegated)',
               hint: 'You can find your client ID by logging in to your ' \
                     "<a href='https://console.developers.google.com/' " \
                     "target='_blank'>Google Developers Console</a> account. " \
@@ -121,20 +139,22 @@
                     'OAuth client. <br> More information about authentication ' \
                     "can be found <a href='https://developers.google.com/identity/" \
                     "protocols/OAuth2?hl=en_US' target='_blank'>here</a>.",
-              optional: false },
-            { name: 'client_secret',
+              optional: false
+             },
+            { # - client_secret
+              name: 'client_secret', group: 'OAuth 2.0 (user delegated)',
               hint: 'You can find your client secret by logging in to your ' \
                     "<a href='https://console.developers.google.com/' " \
                     "target='_blank'>Google Developers Console</a> account. " \
                     'After logging in, click on Credentials to show your ' \
                     'OAuth 2.0 client IDs and select your desired account name.',
-              optional: false,
-              control_type: 'password' }
+              optional: false, 
+              control_type: 'password' 
+            }
           ],
           authorization_url: lambda do |connection|
             scopes = [
-              'https://www.googleapis.com/auth/cloud-platform',
-              'https://www.googleapis.com/auth/dialogflow'
+              'https://www.googleapis.com/auth/cloud-platform'
             ].join(' ')
             params = {
               client_id: connection['client_id'],
@@ -144,11 +164,10 @@
               include_granted_scopes: 'true',
               prompt: 'consent'
             }.to_param
-
-            "https://accounts.google.com/o/oauth2/auth?#{params}"
+            "https://accounts.google.com/o/oauth2/v2/auth?#{params}"
           end,
           acquire: lambda do |connection, auth_code|
-            response = post('https://accounts.google.com/o/oauth2/token').
+            response = post('https://oauth2.googleapis.com/token').
                        payload(
                          client_id: connection['client_id'],
                          client_secret: connection['client_secret'],
@@ -159,7 +178,7 @@
             [response, nil, nil]
           end,
           refresh: lambda do |connection, refresh_token|
-            post('https://accounts.google.com/o/oauth2/token').
+            post('https://oauth2.googleapis.com/token').
               payload(
                 client_id: connection['client_id'],
                 client_secret: connection['client_secret'],
@@ -173,10 +192,9 @@
         },
         custom: {
           type: 'custom_auth',
-
           fields: [
             { name: 'service_account_email',
-              optional: false,
+              optional: false, group: 'Service Account',
               hint: 'The service account created to delegate other domain users. ' \
                     'e.g. name@project.iam.gserviceaccount.com' },
             { name: 'client_id', optional: false },
@@ -190,7 +208,6 @@
               multiline: true,
               optional: false }
           ],
-
           acquire: lambda do |connection|
             jwt_body_claim = {
               'iat' => now.to_i,
@@ -213,9 +230,7 @@
 
             { access_token: response['access_token'] }
           end,
-
           refresh_on: [401],
-
           apply: lambda do |connection|
             headers(Authorization: "Bearer #{connection['access_token']}")
           end
@@ -231,7 +246,8 @@
   test: lambda do |connection|
     get("projects/#{connection['project']}/locations/#{connection['region']}/datasets").
       after_error_response(/.*/) do |_code, body, _header, message|
-        error("#{message}: #{body}")
+        msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
+        error(msg)
       end
   end,
 
@@ -263,7 +279,8 @@
         post("projects/#{connection['project']}/locations/#{connection['region']}" \
              "/#{input['model']}:generateContent", payload).
           after_error_response(/.*/) do |_code, body, _header, message|
-          error("#{message}: #{body}")
+            msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
+            error(msg)
         end
       end,
 
@@ -295,7 +312,8 @@
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
                    after_error_response(/.*/) do |_code, body, _header, message|
-                     error("#{message}: #{body}")
+                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
+                    error(msg)
                    end
         call('extract_generic_response', response, true)
       end,
@@ -326,9 +344,10 @@
         payload = call('payload_for_summarize', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
-                   after_error_response(/.*/) do |_code, body, _header, message|
-                     error("#{message}: #{body}")
-                   end
+                  after_error_response(/.*/) do |_code, body, _header, message|
+                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
+                    error(msg)
+                  end
         call('extract_generic_response', response, false)
       end,
 
@@ -360,9 +379,10 @@
         payload = call('payload_for_parse', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
-                   after_error_response(/.*/) do |_code, body, _header, message|
-                     error("#{message}: #{body}")
-                   end
+                  after_error_response(/.*/) do |_code, body, _header, message|
+                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
+                    error(msg)
+                  end
         call('extract_parsed_response', response)
       end,
 
@@ -397,9 +417,10 @@
         payload = call('payload_for_email', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
-                   after_error_response(/.*/) do |_code, body, _header, message|
-                     error("#{message}: #{body}")
-                   end
+                  after_error_response(/.*/) do |_code, body, _header, message|
+                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
+                    error(msg)
+                  end
         call('extract_generated_email_response', response)
       end,
 
@@ -436,9 +457,10 @@
         payload = call('payload_for_categorize', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
-                   after_error_response(/.*/) do |_code, body, _header, message|
-                     error("#{message}: #{body}")
-                   end
+                  after_error_response(/.*/) do |_code, body, _header, message|
+                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
+                    error(msg)
+                  end
         call('extract_generic_response', response, true)
       end,
 
@@ -473,9 +495,10 @@
         payload = call('payload_for_analyze', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
-                   after_error_response(/.*/) do |_code, body, _header, message|
-                     error("#{message}: #{body}")
-                   end
+                  after_error_response(/.*/) do |_code, body, _header, message|
+                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
+                    error(msg)
+                  end
         call('extract_generic_response', response, true)
       end,
 
@@ -505,9 +528,10 @@
         payload = call('payload_for_analyze_image', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent", payload).
-                   after_error_response(/.*/) do |_code, body, _header, message|
-                     error("#{message}: #{body}")
-                   end
+                  after_error_response(/.*/) do |_code, body, _header, message|
+                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
+                    error(msg)
+                  end
         call('extract_generic_response', response, false)
       end,
 
@@ -541,9 +565,10 @@
         payload = call('payload_for_text_embedding', input)
         response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:predict", payload).
-                   after_error_response(/.*/) do |_code, body, _header, message|
-                     error("#{message}: #{body}")
-                   end
+                  after_error_response(/.*/) do |_code, body, _header, message|
+                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
+                    error(msg)
+                  end
         call('extract_embedding_response', response)
       end,
 
@@ -1401,12 +1426,9 @@
     end,
     ensure_workato_api!: lambda do |connection|
       missing = []
-      missing << 'workato_api_host'   if connection['workato_api_host'].blank?
-      missing << 'workato_account_id' if connection['workato_account_id'].blank?
-      missing << 'workato_api_token'  if connection['workato_api_token'].blank?
-      if missing.present?
-        error("To use 'Workato data table' as rules source, please configure connection fields: #{missing.join(', ')}")
-      end
+      # host is optional (defaults to https://www.workato.com)
+      missing << 'workato_api_token' if connection['workato_api_token'].blank?
+      error("To use 'Workato data table' as rules source, please configure connection fields: #{missing.join(', ')}") if missing.present?
     end,
     workato_api_headers: lambda do |connection|
       {
@@ -1415,40 +1437,45 @@
       }
     end,
     workato_api_base: lambda do |connection|
-      (connection['workato_api_host'] || 'https://www.workato.com').gsub(%r{/\z}, '')
+      host = connection['workato_api_host'].presence || 'https://app.workato.com'
+      host.gsub(%r{/\z}, '')
     end,
     list_datatables: lambda do |connection|
       call('ensure_workato_api!', connection)
       base = call('workato_api_base', connection)
-      account = connection['workato_account_id']
-      get("#{base}/api/v2/accounts/#{account}/data_tables")
+      get("#{base}/api/v1/tables")
         .headers(call('workato_api_headers', connection))
-        .after_error_response(/.*/) { |code, body, _h, msg| error("Data tables list failed (HTTP #{code}) - #{msg}: #{body}") }
+        .after_error_response(/.*/) { |code, body, _h, msg| error("List tables failed (HTTP #{code}) - #{msg}: #{body}") }
     end,
     list_datatable_columns: lambda do |connection, table_id|
       call('ensure_workato_api!', connection)
       base = call('workato_api_base', connection)
-      account = connection['workato_account_id']
-      get("#{base}/api/v2/accounts/#{account}/data_tables/#{table_id}")
+      get("#{base}/api/v1/tables/#{table_id}")
         .headers(call('workato_api_headers', connection))
-        .after_error_response(/.*/) { |code, body, _h, msg| error("Get data table failed (HTTP #{code}) - #{msg}: #{body}") }
+        .after_error_response(/.*/) { |code, body, _h, msg| error("Get table failed (HTTP #{code}) - #{msg}: #{body}") }
     end,
     fetch_datatable_rows: lambda do |connection, table_id, limit = 1000|
       call('ensure_workato_api!', connection)
       base = call('workato_api_base', connection)
-      account = connection['workato_account_id']
+      headers = call('workato_api_headers', connection)
       rows = []
-      page = 1
-      per_page = 200
+      token = nil
+      # Use records/query with paging by continuation_token
       loop do
-        resp = get("#{base}/api/v2/accounts/#{account}/data_tables/#{table_id}/rows")
-          .params(page: page, per_page: per_page)
-          .headers(call('workato_api_headers', connection))
-          .after_error_response(/.*/) { |code, body, _h, msg| error("List rows failed (HTTP #{code}) - #{msg}: #{body}") }
-        data = resp['rows'] || []
-        rows.concat(data)
-        break if data.length < per_page || rows.length >= limit
-        page += 1
+        body = {
+          select: nil,            # nil = all columns
+          where:  nil,            # nil = no filter
+          order:  nil,
+          limit:  [200, limit - rows.length].min,
+          continuation_token: token
+        }.compact
+        resp = post("#{base}/api/v1/tables/#{table_id}/records/query", body)
+                 .headers(headers)
+                 .after_error_response(/.*/) { |code, body_s, _h, msg| error("Query rows failed (HTTP #{code}) - #{msg}: #{body_s}") }
+        batch = resp['records'] || resp['data'] || []  # tolerate doc shape drift
+        rows.concat(batch)
+        token = resp['continuation_token']
+        break if token.blank? || rows.length >= limit || batch.empty?
       end
       rows
     end,
@@ -1591,6 +1618,7 @@
         [
           { name: 'instances',
             type: 'array', of: 'object',
+            group: 'Instances',
             properties: [
               { name: 'prompt',
                 hint: 'Text input to generate model response. Can include preamble, ' \
@@ -1599,6 +1627,7 @@
             ] },
           { name: 'parameters',
             type: 'object',
+            group: 'Parameters',
             properties: [
               { name: 'temperature',
                 hint: 'The temperature is used for sampling during response generation, ' \
@@ -1686,6 +1715,7 @@
             of: 'object',
             hint: 'Specify the list of tools the model may use to generate ' \
                   'the next response.',
+            group: 'Tools',
             properties: [
               { name: 'functionDeclarations',
                 type: 'array',
@@ -1702,9 +1732,11 @@
                     hint: 'Provide the JSON schema object format.' }
                 ] }
             ] },
+
           { name: 'toolConfig',
             type: 'object',
             hint: 'This tool config is shared for all tools provided in the request.',
+            group: 'Tools',
             properties: [
               { name: 'functionCallingConfig',
                 type: 'object',
@@ -1729,10 +1761,12 @@
                     hint: 'Function names to call. Only set when the Mode is ANY.' }
                 ] }
             ] },
+
           { name: 'safetySettings',
             type: 'array',
             of: 'object',
             hint: 'Specify safety settings when relevant',
+            group: 'Safety',
             properties: [
               { name: 'category',
                 control_type: 'select',
@@ -1783,9 +1817,11 @@
                         'SEVERITY or PROBABILITY.'
                 } }
             ] },
+
           { name: 'generationConfig',
             type: 'object',
             hint: 'Specify parameters that are suitable for your use case',
+            group: 'Generation',
             properties: [
               { name: 'stopSequences',
                 type: 'array',
@@ -1859,9 +1895,11 @@
                 ngIf: 'input.generationConfig.responseMimeType == "application/json"',
                 hint: 'Define the output data schema.' }
             ] },
+
           { name: 'systemInstruction',
             type: 'object',
             hint: 'Specify the system instructions for the model.',
+            group: 'System instructions',
             properties: [
               { name: 'role',
                 hint: 'The role should be <b>model</b> when defining system instructions.' },
@@ -1959,12 +1997,14 @@
               pick_list: :message_types,
               extends_schema: true,
               optional: false,
-              hint: 'Choose the type of the message to send.' },
+              hint: 'Choose the type of the message to send.',
+              group: 'Message' },
             { name: 'messages',
               label: is_single_message ? 'Message' : 'Messages',
               type: 'object',
               optional: false,
-              properties: message_schema }
+              properties: message_schema,
+              group: 'Message' }
           ].compact
         ).concat(object_definitions['config_schema'])
       end
@@ -2067,7 +2107,8 @@
                 hint: 'Enter the output language. Eg. English'
               },
               toggle_hint: 'Select from list',
-              hint: 'Select the desired output language' },
+              hint: 'Select the desired output language',
+              group: 'Task input' },
             { name: 'from',
               label: 'Source language',
               optional: true,
@@ -2085,13 +2126,15 @@
               },
               toggle_hint: 'Select from list',
               hint: 'Select the source language. If this value is left blank, we will ' \
-                    'automatically attempt to identify it.' },
+                    'automatically attempt to identify it.',
+              group: 'Task input' },
             { name: 'text',
               label: 'Source text',
               type: 'string',
               control_type: 'text-area',
               optional: false,
-              hint: 'Enter the text to be translated. Please limit to 2000 tokens' }
+              hint: 'Enter the text to be translated. Please limit to 2000 tokens',
+              group: 'Task input' }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2114,7 +2157,8 @@
               type: 'string',
               control_type: 'text-area',
               optional: false,
-              hint: 'Provide the text to be summarized' },
+              hint: 'Provide the text to be summarized',
+              group: 'Task input' },
             { name: 'max_words',
               label: 'Maximum words',
               type: 'integer',
@@ -2122,7 +2166,8 @@
               optional: true,
               sticky: true,
               hint: 'Enter the maximum number of words for the summary. ' \
-                    'If left blank, defaults to 200.' }
+                    'If left blank, defaults to 200.',
+              group: 'Summary options' }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2144,7 +2189,8 @@
               label: 'Source text',
               control_type: 'text-area',
               optional: false,
-              hint: 'Provide the text to be parsed' },
+              hint: 'Provide the text to be parsed',
+              group: 'Task input' },
             { name: 'object_schema',
               optional: false,
               control_type: 'schema-designer',
@@ -2164,7 +2210,8 @@
                   optional: true,
                   label: 'Description'
                 }
-              ] }
+              ],
+              group: 'Schema' }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2187,7 +2234,8 @@
               type: 'string',
               control_type: 'text-area',
               optional: false,
-              hint: 'Enter a description for the email' }
+              hint: 'Enter a description for the email',
+              group: 'Task input' }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2210,7 +2258,8 @@
               label: 'Source text',
               control_type: 'text-area',
               optional: false,
-              hint: 'Provide the text to be categorized'
+              hint: 'Provide the text to be categorized',
+              group: 'Task input'
             },
             {
               name: 'rules_source',
@@ -2220,9 +2269,9 @@
               default: 'inline_list',
               sticky: true,
               optional: false,
-              hint: 'Choose how to provide categories/rules'
+              hint: 'Choose how to provide categories/rules',
+              group: 'Rules'
             },
-            # --- Inline list (existing behavior) ---
             {
               name: 'categories',
               ngIf: 'input.rules_source == "inline_list"',
@@ -2239,9 +2288,11 @@
               properties: [
                 { name: 'key',  label: 'Category', hint: 'Category name' },
                 { name: 'rule', label: 'Rule (optional)', hint: 'E.g. subject contains: “invoice”' }
-              ]
+              ],
+              group: 'Rules'
             },
-            # --- Workato Data Table (new) ---
+
+            # Workato Data Table (conditional)
             {
               name: 'rules_table_id',
               label: 'Data table',
@@ -2258,7 +2309,8 @@
                 control_type: 'text',
                 optional: false,
                 toggle_hint: 'Enter table ID manually'
-              }
+              },
+              group: 'Rules (Data Table)'
             },
             {
               name: 'category_column',
@@ -2276,7 +2328,8 @@
                 control_type: 'text',
                 optional: false,
                 toggle_hint: 'Enter column name manually'
-              }
+              },
+              group: 'Rules (Data Table)'
             },
             {
               name: 'rule_column',
@@ -2294,7 +2347,8 @@
                 control_type: 'text',
                 optional: true,
                 toggle_hint: 'Enter column name manually'
-              }
+              },
+              group: 'Rules (Data Table)'
             },
             {
               name: 'only_active',
@@ -2303,7 +2357,8 @@
               type: 'boolean',
               control_type: 'checkbox',
               sticky: true,
-              hint: 'If your table has an "active" boolean column, only include rows where active = true'
+              hint: 'If your table has an "active" boolean column, only include rows where active = true',
+              group: 'Filter'
             },
             {
               name: 'active_column',
@@ -2313,7 +2368,8 @@
               control_type: 'select',
               pick_list: :workato_datatable_columns,
               pick_list_params: { table_id: 'rules_table_id' },
-              hint: 'Name of the boolean column to filter on (true means active).'
+              hint: 'Name of the boolean column to filter on (true means active).',
+              group: 'Filter'
             }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
@@ -2335,12 +2391,14 @@
               label: 'Source text',
               control_type: 'text-area',
               hint: 'Provide the text to be analyzed.',
-              optional: false },
+              optional: false,
+              group: 'Task input' },
             { name: 'question',
               label: 'Instruction',
               optional: false,
               hint: 'Enter analysis instructions, such as an analysis ' \
-                    'technique or question to be answered.' }
+                    'technique or question to be answered.',
+              group: 'Instruction' }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2374,19 +2432,23 @@
               hint: 'Provide the model you want to use in this format: ' \
                     '<b>publishers/{publisher}/models/{model}</b>. ' \
                     'E.g. publishers/google/models/gemini-1.5-pro-001'
-            } },
+            },
+            group: 'Model' },
           { name: 'question',
             label: 'Your question about the image',
             hint: 'Please specify a clear question for image analysis.',
-            optional: false },
+            optional: false,
+            group: 'Prompt' },
           { name: 'image',
             label: 'Image data',
             hint: 'Provide the image to be analyzed.',
-            optional: false },
+            optional: false,
+            group: 'Image' },
           { name: 'mime_type',
             label: 'MIME type',
             optional: false,
-            hint: 'Provide the MIME type of the image. E.g. image/jpeg.' }
+            hint: 'Provide the MIME type of the image. E.g. image/jpeg.',
+            group: 'Image' }
         ].concat(object_definitions['config_schema'].only('safetySettings'))
       end
     },
@@ -2420,12 +2482,14 @@
               hint: 'Provide the model you want to use in this format: ' \
                     '<b>publishers/{publisher}/models/{model}</b>. ' \
                     'E.g. publishers/google/models/text-embedding-004'
-            } },
+            },
+            group: 'Model' },
           { name: 'text',
             label: 'Text for embedding generation',
             control_type: 'text-area',
             optional: false,
-            hint: 'Input text must not exceed 8192 tokens (approximately 6000 words).' },
+            hint: 'Input text must not exceed 8192 tokens (approximately 6000 words).',
+            group: 'Text' },
           { name: 'task_type',
             sticky: true,
             extends_schema: true,
@@ -2446,11 +2510,13 @@
               hint: 'Allowed values are: RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT, ' \
                     'SEMANTIC_SIMILARITY, CLASSIFICATION, CLUSTERING, ' \
                     'QUESTION_ANSWERING or FACT_VERIFICATION.'
-            } },
+            },
+            group: 'Task options' },
           { name: 'title',
             sticky: true,
             ngIf: 'input.task_type == "RETRIEVAL_DOCUMENT"',
-            hint: 'Used to help the model produce better embeddings.' }
+            hint: 'Used to help the model produce better embeddings.',
+            group: 'Task options' }
         ]
       end
     },
@@ -2473,24 +2539,28 @@
             label: 'Index endpoint host',
             optional: false,
             hint: 'The host for the index endpoint (no path). Example: 1234.us-central1.vdb.vertexai.goog '\
-                  'for public endpoints, or your PSC DNS/IP. Do NOT include https://.' },
+                  'for public endpoints, or your PSC DNS/IP. Do NOT include https://.',
+            group: 'Endpoint' },
 
           { name: 'index_endpoint_id',
             label: 'Index endpoint ID',
             optional: false,
-            hint: 'Resource ID only (not full path). Find it on the Index endpoint details page.' },
+            hint: 'Resource ID only (not full path). Find it on the Index endpoint details page.',
+            group: 'Index context' },
 
           { name: 'deployedIndexId',
             label: 'Deployed index ID',
             optional: false,
             sticky: true,
-            hint: 'The deployed index to query (from your index endpoint).' },
+            hint: 'The deployed index to query (from your index endpoint).',
+            group: 'Index context' },
 
           { name: 'returnFullDatapoint',
             label: 'Return full datapoints',
             type: 'boolean',
             control_type: 'checkbox',
-            hint: 'If enabled, returns full vectors and restricts. Increases latency and cost.' },
+            hint: 'If enabled, returns full vectors and restricts. Increases latency and cost.',
+            group: 'Options' },
 
           {
             name: 'queries',
@@ -2498,6 +2568,7 @@
             of: 'object',
             optional: false,
             hint: 'One or more nearest-neighbor queries.',
+            group: 'Queries',
             properties: [
               {
                 name: 'datapoint',
@@ -2641,10 +2712,13 @@
               hint: 'Provide the model you want to use in this format: ' \
                     '<b>publishers/{publisher}/models/{model}</b>. ' \
                     'E.g. publishers/google/models/gemini-1.5-pro-001'
-            } }
+            },
+            group: 'Model'
+          }
         ]
       end
     }
+
   },
 
   pick_lists: {
@@ -2751,12 +2825,9 @@
     workato_datatables: lambda do |connection|
       begin
         resp = call('list_datatables', connection)
-        (resp['data_tables'] || resp).map do |t|
-          label = t['name'].presence || t['id']
-          [label, t['id']]
-        end
+        tables = resp['data_tables'] || resp # API may return array directly
+        Array(tables).map { |t| [t['name'].presence || t['id'], t['id']] }
       rescue StandardError
-        # Fallback to empty; UI will allow manual ID via toggle field
         []
       end
     end,
@@ -2764,7 +2835,7 @@
       return [] if table_id.blank?
       begin
         t = call('list_datatable_columns', connection, table_id)
-        cols = (t['columns'] || t.dig('data_table', 'columns') || [])
+        cols = t['columns'] || t.dig('data_table', 'columns') || []
         cols.map { |c| [c['name'], c['name']] }
       rescue StandardError
         []
