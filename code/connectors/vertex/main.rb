@@ -246,8 +246,7 @@
   test: lambda do |connection|
     get("projects/#{connection['project']}/locations/#{connection['region']}/datasets").
       after_error_response(/.*/) do |_code, body, _header, message|
-        msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
-        error(msg)
+        call('handle_vertex_error', connection, code, body, message)
       end
   end,
 
@@ -274,13 +273,17 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        # Validate model
         call('validate_publisher_model!', connection, input['model'])
+        # Build payload
         payload = call('payload_for_send_message', input)
-        post("projects/#{connection['project']}/locations/#{connection['region']}" \
-             "/#{input['model']}:generateContent", payload).
+        # Build the url
+        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
+              "/#{input['model']}:generateContent"
+        # Make the request
+        post(url, payload).
           after_error_response(/.*/) do |_code, body, _header, message|
-            msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
-            error(msg)
+            call('handle_vertex_error', connection, code, body, message)
         end
       end,
 
@@ -292,6 +295,7 @@
         call('sample_record_output', 'send_message')
       end
     },
+    # --- Generative and Analysis actions (text models) ---
     translate_text: {
       title: 'Translate text',
       subtitle: 'Translate text between languages',
@@ -307,14 +311,19 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        # Validate model
         call('validate_publisher_model!', connection, input['model'])
+        # Build payload
         payload = call('payload_for_translate', input)
-        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
-                        "/#{input['model']}:generateContent", payload).
-                   after_error_response(/.*/) do |_code, body, _header, message|
-                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
-                    error(msg)
-                   end
+        # Build the url
+        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
+              "/#{input['model']}:generateContent"
+        # Make the request
+        response = post(url, payload).
+          after_error_response(/.*/) do |code, body, _header, message|
+            call('handle_vertex_error', connection, code, body, message)
+          end
+        # Extract and return the response
         call('extract_generic_response', response, true)
       end,
 
@@ -340,14 +349,19 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        # Validate model
         call('validate_publisher_model!', connection, input['model'])
+        # Build payload
         payload = call('payload_for_summarize', input)
-        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
-                        "/#{input['model']}:generateContent", payload).
-                  after_error_response(/.*/) do |_code, body, _header, message|
-                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
-                    error(msg)
+        # Build the url
+        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
+              "/#{input['model']}:generateContent"
+        # Make the request
+        response = post(url, payload).
+                  after_error_response(/.*/) do |code, body, _header, message|
+                    call('handle_vertex_error', connection, code, body, message)
                   end
+        # Extract and return the response
         call('extract_generic_response', response, false)
       end,
 
@@ -375,14 +389,19 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        # Validate model
         call('validate_publisher_model!', connection, input['model'])
+        # Build payload
         payload = call('payload_for_parse', input)
-        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
-                        "/#{input['model']}:generateContent", payload).
-                  after_error_response(/.*/) do |_code, body, _header, message|
-                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
-                    error(msg)
+        # Build the url
+        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
+                        "/#{input['model']}:generateContent"
+        # Make the request
+        response = post(url, payload).
+                  after_error_response(/.*/) do |code, body, _header, message|
+                    call('handle_vertex_error', connection, code, body, message)
                   end
+        # Extract and return the response
         call('extract_parsed_response', response)
       end,
 
@@ -413,14 +432,18 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        # Validate model
         call('validate_publisher_model!', connection, input['model'])
+        # Build payload
         payload = call('payload_for_email', input)
-        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
-                        "/#{input['model']}:generateContent", payload).
-                  after_error_response(/.*/) do |_code, body, _header, message|
-                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
-                    error(msg)
+        # Build the url
+        url ="projects/#{connection['project']}/locations/#{connection['region']}" \
+                        "/#{input['model']}:generateContent"
+        response = post(url, payload).
+                  after_error_response(/.*/) do |code, body, _header, message|
+                    call('handle_vertex_error', connection, code, body, message)
                   end
+        # Extract and return the response
         call('extract_generated_email_response', response)
       end,
 
@@ -450,17 +473,22 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        # Validate model
         call('validate_publisher_model!', connection, input['model'])
+        # Ensure Workato API details if rules source is Workato table
         if input['rules_source'] == 'workato_table'
           call('ensure_workato_api!', connection)
         end
+        # Build payload
         payload = call('payload_for_categorize', input)
-        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
-                        "/#{input['model']}:generateContent", payload).
-                  after_error_response(/.*/) do |_code, body, _header, message|
-                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
-                    error(msg)
+        # Build the url
+        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
+                        "/#{input['model']}:generateContent"
+        response = post(url, payload).
+                  after_error_response(/.*/) do |code, body, _header, message|
+                    call('handle_vertex_error', connection, code, body, message)
                   end
+        # Extract and return the response
         call('extract_generic_response', response, true)
       end,
 
@@ -491,14 +519,19 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        # Validate model
         call('validate_publisher_model!', connection, input['model'])
+        # Build payload
         payload = call('payload_for_analyze', input)
-        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
-                        "/#{input['model']}:generateContent", payload).
-                  after_error_response(/.*/) do |_code, body, _header, message|
-                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
-                    error(msg)
+        # Build the url
+        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
+              "/#{input['model']}:generateContent"
+        # Make the request
+        response = post(url, payload).
+                  after_error_response(/.*/) do |code, body, _header, message|
+                    call('handle_vertex_error', connection, code, body, message)
                   end
+        # Extract and return the response
         call('extract_generic_response', response, true)
       end,
 
@@ -525,14 +558,19 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        # Validate model
         call('validate_publisher_model!', connection, input['model'])
+        # Build payload
         payload = call('payload_for_analyze_image', input)
-        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
-                        "/#{input['model']}:generateContent", payload).
-                  after_error_response(/.*/) do |_code, body, _header, message|
-                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
-                    error(msg)
+        # Build the url
+        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
+              "/#{input['model']}:generateContent"
+        # Make the request
+        response = post(url, payload).
+                  after_error_response(/.*/) do |code, body, _header, message|
+                    call('handle_vertex_error', connection, code, body, message)
                   end
+        # Extract and return the response
         call('extract_generic_response', response, false)
       end,
 
@@ -563,14 +601,19 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
+        # Validate model
         call('validate_publisher_model!', connection, input['model'])
+        # Build payload
         payload = call('payload_for_text_embedding', input)
-        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
-                        "/#{input['model']}:predict", payload).
-                  after_error_response(/.*/) do |_code, body, _header, message|
-                    msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
-                    error(msg)
-                  end
+        # Build the url
+        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
+              "/#{input['model']}:predict"
+        # Make the request
+        response = post(url, payload).
+          after_error_response(/.*/) do |code, body, _header, message|
+            call('handle_vertex_error', connection, code, body, message)
+          end
+        # Extract and return the response
         call('extract_embedding_response', response)
       end,
 
@@ -605,9 +648,7 @@
       execute: lambda do |connection, input, _eis, _eos|
         # Build payload and normalized host
         payload = call('payload_for_find_neighbors', input)
-
         host = input['index_endpoint_host'].to_s.strip
-
         # Host normalization
         if host.blank?
           error('Index endpoint host is required')
@@ -630,19 +671,21 @@
         error('Project is required') if project.blank?
         error('Region is required') if region.blank?
         error('Index endpoint ID is required') if endpoint_id.blank?
-
+        # Construct the full URL
         url = "https://#{host}/#{version}/projects/#{project}/locations/#{region}/" \
               "indexEndpoints/#{endpoint_id}:findNeighbors"
-
+        # Make the request
         post(url, payload).
           after_error_response(/404/) do |code, body, _headers, message|
-            error("Index endpoint not found. Please verify the host (#{host}) and endpoint ID (#{endpoint_id})")
-          end.
-          after_error_response(/400/) do |code, body, _headers, message|
-            error("Invalid request format: #{message}. Response: #{body}")
+            # Use a custom message for 404s since they're often configuration errors
+            error("Index endpoint not found. Please verify:\n" \
+                  "• Host: #{host}\n" \
+                  "• Endpoint ID: #{endpoint_id}\n" \
+                  "• Region: #{region}")
           end.
           after_error_response(/.*/) do |code, body, _headers, message|
-            error("Vector Search error (HTTP #{code}): #{message}")
+            # Use the centralized handler for all other errors
+            call('handle_vertex_error', connection, code, body, message)
           end
       end,
 
@@ -1363,9 +1406,13 @@
                     list_all_versions: true
                   )
                   .after_error_response(/.*/) do |code, body, _hdrs, message|
-                    # Log but don't error - fall back to static list
-                    puts "Model listing failed (HTTP #{code}): #{message}"
-                    raise "API Error"
+                    # For discovery, we log and return empty instead of erroring
+                    if connection['verbose_errors']
+                      puts "Model listing failed (HTTP #{code}): #{body}"
+                    else
+                      puts "Model listing failed (HTTP #{code})"
+                    end
+                    raise "API Error" # This gets caught below
                   end
 
           batch = resp['publisherModels'] || []
@@ -1455,7 +1502,8 @@
 
       # Validate model name format
       unless model_name.match?(/^publishers\/[^\/]+\/models\/[^\/]+$/)
-        error("Invalid model name format: #{model_name}. Expected format: publishers/{publisher}/models/{model}")
+        error("Invalid model name format: #{model_name}\n" \
+              "Expected format: publishers/{publisher}/models/{model}")
       end
 
       region = connection['region'].presence || 'us-central1'
@@ -1465,13 +1513,18 @@
         resp = get(url)
                 .params(view: 'PUBLISHER_MODEL_VIEW_FULL')
                 .after_error_response(/404/) do |code, body, _hdrs, message|
-                  error("Model '#{model_name}' not found in region '#{region}'. Please check model name and region.")
+                  # Specific message for model not found
+                  error("Model '#{model_name}' not found in region '#{region}'.\n" \
+                        "Please check:\n" \
+                        "• Model name spelling\n" \
+                        "• Region availability\n" \
+                        "• Model deprecation status")
                 end
                 .after_error_response(/403/) do |code, body, _hdrs, message|
                   error("Access denied to model '#{model_name}'. Please check your project permissions.")
                 end
                 .after_error_response(/.*/) do |code, body, _hdrs, message|
-                  error("Model validation failed (HTTP #{code}): #{message}")
+                  call('handle_vertex_error', connection, code, body, message)
                 end
 
         # Enforce GA unless preview is explicitly allowed
@@ -1488,6 +1541,62 @@
         error("Failed to validate model: #{e.message}")
       end
     end,
+    handle_vertex_error: lambda do |connection, code, body, message, context = {}|
+      # Parse the body for structured error information
+      error_details = begin
+        parsed = parse_json(body)
+        # Google APIs often nest the error message
+        parsed.dig('error', 'message') || parsed['message'] || body
+      rescue
+        body
+      end
+      
+      # Build base message based on status code
+      base_message = case code
+      when 400
+        "Invalid request format"
+      when 401
+        "Authentication failed - please check your credentials"
+      when 403
+        "Permission denied - verify Vertex AI API is enabled"
+      when 404
+        "Resource not found"
+      when 429
+        "Rate limit exceeded - please wait before retrying"
+      when 500
+        "Google service error - temporary issue"
+      when 502, 503, 504
+        "Google service temporarily unavailable"
+      else
+        "API error"
+      end
+      
+      # Add context if provided
+      if context[:action].present?
+        base_message = "#{context[:action]} failed: #{base_message}"
+      end
+      
+      # Build final message
+      if connection['verbose_errors']
+        error_message = "#{base_message} (HTTP #{code})"
+        error_message += "\nDetails: #{error_details}" if error_details.present?
+        error_message += "\nOriginal: #{message}" if message != error_details
+        error(error_message)
+      else
+        hint = case code
+        when 401, 403
+          "\nEnable verbose errors in connection settings for details"
+        when 429
+          "\nConsider adding delays between requests"
+        when 500..599
+          "\nThis is usually temporary - retry in a few moments"
+        else
+          ""
+        end
+        error("#{base_message}#{hint}")
+      end
+    end,
+    # --- Workato Data Table integration for Categorize action ---
     ensure_workato_api!: lambda do |connection|
       missing = []
       # host is optional (defaults to https://www.workato.com)
@@ -1507,16 +1616,37 @@
     list_datatables: lambda do |connection|
       call('ensure_workato_api!', connection)
       base = call('workato_api_base', connection)
+
       get("#{base}/api/v1/tables")
         .headers(call('workato_api_headers', connection))
-        .after_error_response(/.*/) { |code, body, _h, msg| error("List tables failed (HTTP #{code}) - #{msg}: #{body}") }
+        .after_error_response(/401/) do |code, body, _h, msg|
+          error("Workato API authentication failed. Please check your API token.")
+        end
+        .after_error_response(/.*/) do |code, body, _h, msg|
+          # Provide context about which API failed
+          if connection['verbose_errors']
+            error("Workato API error (HTTP #{code}): #{body}")
+          else
+            error("Failed to list Workato data tables (HTTP #{code})")
+          end
+        end
     end,
     list_datatable_columns: lambda do |connection, table_id|
       call('ensure_workato_api!', connection)
       base = call('workato_api_base', connection)
-      get("#{base}/api/v1/tables/#{table_id}")
-        .headers(call('workato_api_headers', connection))
-        .after_error_response(/.*/) { |code, body, _h, msg| error("Get table failed (HTTP #{code}) - #{msg}: #{body}") }
+      
+      get("#{base}/api/v1/tables/#{table_id}").
+        headers(call('workato_api_headers', connection)).
+        after_error_response(/404/) do |code, body, _h, msg|
+          error("Data table '#{table_id}' not found")
+        end.
+        after_error_response(/.*/) do |code, body, _h, msg|
+          if connection['verbose_errors']
+            error("Workato API error (HTTP #{code}): #{body}")
+          else
+            error("Failed to get table structure (HTTP #{code})")
+          end
+        end
     end,
     fetch_datatable_rows: lambda do |connection, table_id, limit = 1000|
       call('ensure_workato_api!', connection)
