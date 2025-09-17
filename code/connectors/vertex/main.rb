@@ -729,8 +729,21 @@
     end,
     extract_json: lambda do |resp|
       json_txt = resp&.dig('candidates', 0, 'content', 'parts', 0, 'text')
-      json = json_txt&.gsub(/```json|```JSON|`+$/, '')&.strip
-      parse_json(json) || {}
+      return {} if json_txt.blank?
+
+      # Cleanup markdown code blocks
+      json = json_txt.gsub(/^```(?:json|JSON)?\s*\n?/, '')  # Remove opening fence
+                    .gsub(/\n?```\s*$/, '')                # Remove closing fence
+                    .gsub(/`+$/, '')                       # Remove any trailing backticks
+                    .strip
+
+      begin
+        parse_json(json) || {}
+      rescue => e
+        # Log error for debugging, but return empty hash to prevent action failure
+        puts "JSON parsing failed: #{e.message}. Raw text: #{json_txt}"
+        {}
+      end
     end,
     get_safety_ratings: lambda do |ratings|
       {
