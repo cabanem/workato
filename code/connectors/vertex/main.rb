@@ -10,28 +10,15 @@
 
   connection: {
     fields: [
-      # Developer options
-      { # - verbose_errors
-        name: 'verbose_errors', label: 'Verbose errors',
-        group: 'Developer options',
-        type: 'boolean', control_type: 'checkbox',
-        hint: 'When enabled, include upstream response bodies in error messages. Disable in production.'
-      },
-      # Authentication
-      { # - auth_type
-        name: 'auth_type', label: 'Authentication type', group: 'Authentication',
-        control_type: 'select', 
-        default: 'custom',
-        optional: false, 
-        extends_schema: true, 
-        hint: 'Select the authentication type for connecting to Google Vertex AI.',
-        options: [ ['Client credentials', 'custom'], %w[OAuth2 oauth2] ] 
-      },
-      # Vertex AI environment
-      { # - region
-        name: 'region', label: 'Region', group: 'Vertex AI environment',
-        control_type: 'select', 
-        optional: false,
+      { name: 'auth_type', control_type: 'select',
+        label: 'Authentication type', default: 'custom',
+        optional: false, extends_schema: true,
+        pick_list: [
+          ['Client credentials', 'custom'],
+          %w[OAuth2 oauth2]
+        ] },
+      { name: 'region',
+        control_type: 'select',
         options: [
           ['US central 1', 'us-central1'],
           ['US east 1', 'us-east1'],
@@ -50,6 +37,7 @@
           ['Asia northeast 3', 'asia-northeast3'],
           ['Asia southeast 1', 'asia-southeast1']
         ],
+        optional: false,
         hint: 'Select the Google Cloud Platform (GCP) region used for the Vertex model.',
         toggle_hint: 'Select from list',
         toggle_field: {
@@ -64,56 +52,14 @@
                 "target='_blank'>generative AI on Vertex AI locations</a> for a list " \
                 'of regions and model availability.'
 
-        }
-        
-      },
-      { # - project
-        name: 'project', label: 'Project', group: 'Vertex AI environment',
-        optional: false, 
-        hint: 'E.g abc-dev-1234'
-      },
-      { # - version
-        name: 'version', label: 'Version', group: 'Vertex AI environment',
-        optional: false, 
+        } },
+      { name: 'project',
+        optional: false,
+        hint: 'E.g abc-dev-1234' },
+      { name: 'version',
+        optional: false,
         default: 'v1',
-        hint: 'E.g. v1beta1'
-      },
-      # Model discovery and validation
-      { # - dynamic_models
-        name: 'dynamic_models', label: 'Refresh model list from API (Model Garden)', group: 'Model discovery and validation',
-        type: 'boolean',
-        control_type: 'checkbox',
-        optional: true,
-        hint: 'Fetch available Gemini/Embedding models at runtime. Falls back to a curated static list on errors.' 
-      },
-      { # - include_preview_models
-        name: 'include_preview_models', label: 'Include preview/experimental models', group: 'Model discovery and validation',
-        type: 'boolean',
-        control_type: 'checkbox', 
-        optional: true, 
-        sticky: true,
-        hint: 'Also include Experimental/Private/Public Preview models. Leave unchecked for GA-only in production.' 
-      },
-      { # - validate_model_on_run
-        name: 'validate_model_on_run', label: 'Validate model before run', group: 'Model discovery and validation',
-        type: 'boolean', control_type: 'checkbox', optional: true, sticky: true, 
-        hint: 'Pre-flight check the chosen model and your project access before sending the request. Recommended.' },
-      # Workato Developer API for dynamic picklists
-      { # - workato_api_host
-        name: 'workato_api_host', label: 'Workato API host', group: 'Workato Developer API',
-        hint: 'Base URL for the Workato Developer API. Defaults to https://app.eu.workato.com',
-        optional: true,
-        default: 'https://app.eu.workato.com',
-        sticky: true
-      },
-      { # - workato_api_token
-        name: 'workato_api_token', label: 'Workato API token', group: 'Workato Developer API',
-        control_type: 'password',
-        hint: 'Personal access token with Data Tables read scope. Optional, but needed for dynamic table/column picklists.',
-        optional: true,
-        sticky: true
-      }
-
+        hint: 'E.g. v1beta1' }
     ],
     authorization: {
       type: 'multi',
@@ -125,9 +71,9 @@
       options: {
         oauth2: {
           type: 'oauth2',
+
           fields: [
-            { # - client_id
-              name: 'client_id', group: 'OAuth 2.0 (user delegated)',
+            { name: 'client_id',
               hint: 'You can find your client ID by logging in to your ' \
                     "<a href='https://console.developers.google.com/' " \
                     "target='_blank'>Google Developers Console</a> account. " \
@@ -139,22 +85,20 @@
                     'OAuth client. <br> More information about authentication ' \
                     "can be found <a href='https://developers.google.com/identity/" \
                     "protocols/OAuth2?hl=en_US' target='_blank'>here</a>.",
-              optional: false
-             },
-            { # - client_secret
-              name: 'client_secret', group: 'OAuth 2.0 (user delegated)',
+              optional: false },
+            { name: 'client_secret',
               hint: 'You can find your client secret by logging in to your ' \
                     "<a href='https://console.developers.google.com/' " \
                     "target='_blank'>Google Developers Console</a> account. " \
                     'After logging in, click on Credentials to show your ' \
                     'OAuth 2.0 client IDs and select your desired account name.',
-              optional: false, 
-              control_type: 'password' 
-            }
+              optional: false,
+              control_type: 'password' }
           ],
           authorization_url: lambda do |connection|
             scopes = [
-              'https://www.googleapis.com/auth/cloud-platform'
+              'https://www.googleapis.com/auth/cloud-platform',
+              'https://www.googleapis.com/auth/dialogflow'
             ].join(' ')
             params = {
               client_id: connection['client_id'],
@@ -164,10 +108,11 @@
               include_granted_scopes: 'true',
               prompt: 'consent'
             }.to_param
-            "https://accounts.google.com/o/oauth2/v2/auth?#{params}"
+
+            "https://accounts.google.com/o/oauth2/auth?#{params}"
           end,
           acquire: lambda do |connection, auth_code|
-            response = post('https://oauth2.googleapis.com/token').
+            response = post('https://accounts.google.com/o/oauth2/token').
                        payload(
                          client_id: connection['client_id'],
                          client_secret: connection['client_secret'],
@@ -178,7 +123,7 @@
             [response, nil, nil]
           end,
           refresh: lambda do |connection, refresh_token|
-            post('https://oauth2.googleapis.com/token').
+            post('https://accounts.google.com/o/oauth2/token').
               payload(
                 client_id: connection['client_id'],
                 client_secret: connection['client_secret'],
@@ -192,9 +137,10 @@
         },
         custom: {
           type: 'custom_auth',
+
           fields: [
             { name: 'service_account_email',
-              optional: false, group: 'Service Account',
+              optional: false,
               hint: 'The service account created to delegate other domain users. ' \
                     'e.g. name@project.iam.gserviceaccount.com' },
             { name: 'client_id', optional: false },
@@ -208,6 +154,7 @@
               multiline: true,
               optional: false }
           ],
+
           acquire: lambda do |connection|
             jwt_body_claim = {
               'iat' => now.to_i,
@@ -230,7 +177,9 @@
 
             { access_token: response['access_token'] }
           end,
+
           refresh_on: [401],
+
           apply: lambda do |connection|
             headers(Authorization: "Bearer #{connection['access_token']}")
           end
@@ -245,8 +194,8 @@
 
   test: lambda do |connection|
     get("projects/#{connection['project']}/locations/#{connection['region']}/datasets").
-      after_error_response(/.*/) do |code, body, _header, message|
-        call('handle_vertex_error', connection, code, body, message)
+      after_error_response(/.*/) do |_code, body, _header, message|
+        error("#{message}: #{body}")
       end
   end,
 
@@ -273,17 +222,11 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
-        # Validate model
-        call('validate_publisher_model!', connection, input['model'])
-        # Build payload
         payload = call('payload_for_send_message', input)
-        # Build the url
-        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
-              "/#{input['model']}:generateContent"
-        # Make the request
-        post(url, payload).
-          after_error_response(/.*/) do |code, body, _header, message|
-            call('handle_vertex_error', connection, code, body, message)
+        post("projects/#{connection['project']}/locations/#{connection['region']}" \
+             "/#{input['model']}:generateContent", payload).
+          after_error_response(/.*/) do |_code, body, _header, message|
+          error("#{message}: #{body}")
         end
       end,
 
@@ -295,7 +238,6 @@
         call('sample_record_output', 'send_message')
       end
     },
-    # --- Generative and Analysis actions (text models) ---
     translate_text: {
       title: 'Translate text',
       subtitle: 'Translate text between languages',
@@ -311,19 +253,12 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
-        # Validate model
-        call('validate_publisher_model!', connection, input['model'])
-        # Build payload
         payload = call('payload_for_translate', input)
-        # Build the url
-        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
-              "/#{input['model']}:generateContent"
-        # Make the request
-        response = post(url, payload).
-          after_error_response(/.*/) do |code, body, _header, message|
-            call('handle_vertex_error', connection, code, body, message)
-          end
-        # Extract and return the response
+        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
+                        "/#{input['model']}:generateContent", payload).
+                   after_error_response(/.*/) do |_code, body, _header, message|
+                     error("#{message}: #{body}")
+                   end
         call('extract_generic_response', response, true)
       end,
 
@@ -349,19 +284,12 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
-        # Validate model
-        call('validate_publisher_model!', connection, input['model'])
-        # Build payload
         payload = call('payload_for_summarize', input)
-        # Build the url
-        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
-              "/#{input['model']}:generateContent"
-        # Make the request
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
-        # Extract and return the response
+        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
+                        "/#{input['model']}:generateContent", payload).
+                   after_error_response(/.*/) do |_code, body, _header, message|
+                     error("#{message}: #{body}")
+                   end
         call('extract_generic_response', response, false)
       end,
 
@@ -389,19 +317,12 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
-        # Validate model
-        call('validate_publisher_model!', connection, input['model'])
-        # Build payload
         payload = call('payload_for_parse', input)
-        # Build the url
-        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
-                        "/#{input['model']}:generateContent"
-        # Make the request
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
-        # Extract and return the response
+        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
+                        "/#{input['model']}:generateContent", payload).
+                   after_error_response(/.*/) do |_code, body, _header, message|
+                     error("#{message}: #{body}")
+                   end
         call('extract_parsed_response', response)
       end,
 
@@ -432,18 +353,12 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
-        # Validate model
-        call('validate_publisher_model!', connection, input['model'])
-        # Build payload
         payload = call('payload_for_email', input)
-        # Build the url
-        url ="projects/#{connection['project']}/locations/#{connection['region']}" \
-                        "/#{input['model']}:generateContent"
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
-        # Extract and return the response
+        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
+                        "/#{input['model']}:generateContent", payload).
+                   after_error_response(/.*/) do |_code, body, _header, message|
+                     error("#{message}: #{body}")
+                   end
         call('extract_generated_email_response', response)
       end,
 
@@ -473,22 +388,12 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
-        # Validate model
-        call('validate_publisher_model!', connection, input['model'])
-        # Ensure Workato API details if rules source is Workato table
-        if input['rules_source'] == 'workato_table'
-          call('ensure_workato_api!', connection)
-        end
-        # Build payload
-        payload = call('payload_for_categorize', connection, input)
-        # Build the url
-        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
-                        "/#{input['model']}:generateContent"
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
-        # Extract and return the response
+        payload = call('payload_for_categorize', input)
+        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
+                        "/#{input['model']}:generateContent", payload).
+                   after_error_response(/.*/) do |_code, body, _header, message|
+                     error("#{message}: #{body}")
+                   end
         call('extract_generic_response', response, true)
       end,
 
@@ -519,19 +424,12 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
-        # Validate model
-        call('validate_publisher_model!', connection, input['model'])
-        # Build payload
         payload = call('payload_for_analyze', input)
-        # Build the url
-        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
-              "/#{input['model']}:generateContent"
-        # Make the request
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
-        # Extract and return the response
+        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
+                        "/#{input['model']}:generateContent", payload).
+                   after_error_response(/.*/) do |_code, body, _header, message|
+                     error("#{message}: #{body}")
+                   end
         call('extract_generic_response', response, true)
       end,
 
@@ -543,7 +441,6 @@
         call('sample_record_output', 'analyze_text')
       end
     },
-    # --- Generative and Analysis actions (multimodal models) ---
     analyze_image: {
       title: 'Analyze image',
       subtitle: 'Analyze image based on the provided question',
@@ -558,19 +455,12 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
-        # Validate model
-        call('validate_publisher_model!', connection, input['model'])
-        # Build payload
         payload = call('payload_for_analyze_image', input)
-        # Build the url
-        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
-              "/#{input['model']}:generateContent"
-        # Make the request
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
-        # Extract and return the response
+        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
+                        "/#{input['model']}:generateContent", payload).
+                   after_error_response(/.*/) do |_code, body, _header, message|
+                     error("#{message}: #{body}")
+                   end
         call('extract_generic_response', response, false)
       end,
 
@@ -582,7 +472,6 @@
         call('sample_record_output', 'analyze_image')
       end
     },
-    # --- Embedding and Vector Search actions ---
     generate_embedding: {
       title: 'Generate text embedding',
       subtitle: 'Generate text embedding for the input text',
@@ -601,19 +490,12 @@
       end,
 
       execute: lambda do |connection, input, _eis, _eos|
-        # Validate model
-        call('validate_publisher_model!', connection, input['model'])
-        # Build payload
         payload = call('payload_for_text_embedding', input)
-        # Build the url
-        url = "projects/#{connection['project']}/locations/#{connection['region']}" \
-              "/#{input['model']}:predict"
-        # Make the request
-        response = post(url, payload).
-          after_error_response(/.*/) do |code, body, _header, message|
-            call('handle_vertex_error', connection, code, body, message)
-          end
-        # Extract and return the response
+        response = post("projects/#{connection['project']}/locations/#{connection['region']}" \
+                        "/#{input['model']}:predict", payload).
+                   after_error_response(/.*/) do |_code, body, _header, message|
+                     error("#{message}: #{body}")
+                   end
         call('extract_embedding_response', response)
       end,
 
@@ -625,106 +507,6 @@
         call('sample_record_output', 'text_embedding')
       end
     },
-    find_neighbors: {
-      title: 'Find neighbors (Vector Search)',
-      subtitle: 'K-NN query on a deployed Vertex AI index endpoint',
-      description: "Query a <span class='provider'>Vertex AI Vector Search</span> index endpoint "\
-                  "to retrieve nearest neighbors.",
-      retry_on_request: ['POST'],
-      retry_on_response: [429, 500, 502, 503, 504],
-      max_retries: 3,
-      help: {
-        body: "This action queries a deployed Vector Search index endpoint to find nearest neighbors "\
-              "(k-NN). IMPORTANT: Use the endpoint's own host (public endpoint domain or PSC DNS). "\
-              "Final URL looks like https://{INDEX_ENDPOINT_HOST}/v1/projects/{PROJECT}/locations/{LOCATION}/"\
-              "indexEndpoints/{INDEX_ENDPOINT_ID}:findNeighbors. "\
-              "Returning full datapoints increases latency and cost."
-      },
-
-      input_fields: lambda do |object_definitions|
-        object_definitions['find_neighbors_input']
-      end,
-
-      execute: lambda do |connection, input, _eis, _eos|
-        # Build payload and normalized host
-        payload = call('payload_for_find_neighbors', input)
-        host = input['index_endpoint_host'].to_s.strip
-        # Host normalization
-        if host.blank?
-          error('Index endpoint host is required')
-        end
-        
-        # Remove protocol if present and trailing slashes
-        host = host.gsub(/^https?:\/\//i, '').gsub(/\/+$/, '')
-        
-        # Validate host format (basic check for valid domain or IP)
-        unless host.match?(/^[\w\-\.]+(:\d+)?$/)
-          error("Invalid index endpoint host format: #{host}")
-        end
-
-        version = connection['version'].presence || 'v1'
-        project = connection['project']
-        region = connection['region']
-        endpoint_id = input['index_endpoint_id']
-        
-        # Validate required parameters
-        error('Project is required') if project.blank?
-        error('Region is required') if region.blank?
-        error('Index endpoint ID is required') if endpoint_id.blank?
-        # Construct the full URL
-        url = "https://#{host}/#{version}/projects/#{project}/locations/#{region}/" \
-              "indexEndpoints/#{endpoint_id}:findNeighbors"
-        # Make the request
-        post(url, payload).
-          after_error_response(/404/) do |code, body, _headers, message|
-            # Use a custom message for 404s since they're often configuration errors
-            error("Index endpoint not found. Please verify:\n" \
-                  "• Host: #{host}\n" \
-                  "• Endpoint ID: #{endpoint_id}\n" \
-                  "• Region: #{region}")
-          end.
-          after_error_response(/.*/) do |code, body, _headers, message|
-            # Use the centralized handler for all other errors
-            call('handle_vertex_error', connection, code, body, message)
-          end
-      end,
-
-      output_fields: lambda do |object_definitions|
-        object_definitions['find_neighbors_output']
-      end,
-
-      sample_output: lambda do
-        {
-          'nearestNeighbors' => [
-            {
-              'id' => 'query-0',
-              'neighbors' => [
-                {
-                  'distance' => 0.1234,
-                  'datapoint' => {
-                    'datapointId' => 'dp_123',
-                    # Present only when returnFullDatapoint = true
-                    'featureVector' => [0.1, -0.2, 0.3],
-                    'restricts' => [
-                      { 'namespace' => 'color', 'allowList' => ['red'] }
-                    ],
-                    'numericRestricts' => [
-                      { 'namespace' => 'price', 'op' => 'LESS_EQUAL', 'valueFloat' => 9.99 }
-                    ],
-                    'crowdingTag' => { 'crowdingAttribute' => 'brand_A' },
-                    'sparseEmbedding' => {
-                      'values' => [0.4, 0.2],
-                      'dimensions' => [5, 17]
-                    }
-                  }
-                }
-              ]
-            }
-          ]
-        }
-      end
-    },
-    # --- Legacy Text Bison action kept for backward compatibility ---
     get_prediction: {
       title: 'Get prediction',
       subtitle: 'Get prediction in Google Vertex AI',
@@ -775,977 +557,31 @@
           payload(payload)
       end
     }
-
   },
 
   methods: {
-    # ─────────────────────────────────────────────────────────────────────────────
-    # -- Core error and HTTP utilities
-    # ─────────────────────────────────────────────────────────────────────────────
-    handle_vertex_error: lambda do |connection, code, body, message, context = {}|
-      # Parse the body for structured error information
-      error_details = begin
-        parsed = parse_json(body)
-        # Google APIs often nest the error message
-        parsed.dig('error', 'message') || parsed['message'] || body
-      rescue
-        body
-      end
-      
-      # Build base message based on status code
-      base_message = case code
-      when 400
-        "Invalid request format"
-      when 401
-        "Authentication failed - please check your credentials"
-      when 403
-        "Permission denied - verify Vertex AI API is enabled"
-      when 404
-        "Resource not found"
-      when 429
-        "Rate limit exceeded - please wait before retrying"
-      when 500
-        "Google service error - temporary issue"
-      when 502, 503, 504
-        "Google service temporarily unavailable"
-      else
-        "API error"
-      end
-      
-      # Add context if provided
-      if context[:action].present?
-        base_message = "#{context[:action]} failed: #{base_message}"
-      end
-      
-      # Build final message
-      if connection['verbose_errors']
-        error_message = "#{base_message} (HTTP #{code})"
-        error_message += "\nDetails: #{error_details}" if error_details.present?
-        error_message += "\nOriginal: #{message}" if message != error_details
-        error(error_message)
-      else
-        hint = case code
-        when 401, 403
-          "\nEnable verbose errors in connection settings for details"
-        when 429
-          "\nConsider adding delays between requests"
-        when 500..599
-          "\nThis is usually temporary - retry in a few moments"
-        else
-          ""
+    generate_input_fields: lambda do |input|
+      schema = parse_json(input || '[]')
+      call('make_schema_builder_fields_sticky', schema)
+    end,
+    make_schema_builder_fields_sticky: lambda do |schema|
+      schema.map do |field|
+        if field['properties'].present?
+          field['properties'] = call('make_schema_builder_fields_sticky',
+                                     field['properties'])
         end
-        error("#{base_message}#{hint}")
+        field['sticky'] = true
+
+        field
       end
     end,
-    workato_request: lambda do |connection, method:, path:, payload: nil, max_retries: 3|
-      call('ensure_workato_api!', connection)
-      base   = call('workato_api_base', connection)
-      url    = "#{base}#{path}"
-      hdrs   = call('workato_api_headers', connection)
-
-      attempt = 0
-      begin
-        attempt += 1
-        resp = if method == :get
-          get(url).headers(hdrs)
-        else
-          post(url, payload).headers(hdrs)
-        end
-
-        resp.after_error_response(/429|5\d{2}/) do |code, body, _h, message|
-          # retryable
-          if attempt <= max_retries
-            sleep(2 ** attempt) # 2s, 4s, 8s
-            raise "RETRY"       # bubble to rescue to re-run
-          else
-            # fall through to generic error
-            error_msg = connection['verbose_errors'] ? "#{message}: #{body}" : message
-            error("Workato API throttled/failed (HTTP #{code}). #{error_msg}")
-          end
-        end.
-        after_error_response(/.*/) do |code, body, _h, message|
-          # non-retryable
-          if connection['verbose_errors']
-            error("Workato API error (HTTP #{code}) on #{path}: #{body}")
-          else
-            error("Workato API error (HTTP #{code}) on #{path}. Enable verbose errors for details.")
-          end
-        end
-
-      rescue => e
-        # loop will re-run when we raise "RETRY"
-        if e.message == 'RETRY'
-          retry
-        else
-          error("Workato API request failed: #{e.message}")
-        end
-      end
-    end,
-    workato_get:  lambda { |connection, path| call('workato_request', connection, method: :get,  path: path) },
-    workato_post: lambda { |connection, path, payload| call('workato_request', connection, method: :post, path: path, payload: payload) },
     replace_backticks_with_hash: lambda do |text|
       text&.gsub('```', '####')
     end,
-    truthy?: lambda do |val|
-      case val
-      when TrueClass then true
-      when FalseClass then false
-      when Integer then val != 0
-      else
-        %w[true 1 yes y t].include?(val.to_s.strip.downcase)
-      end
-    end,
-    # ─────────────────────────────────────────────────────────────────────────────
-    # -- Vertex model discovery and validation
-    # ─────────────────────────────────────────────────────────────────────────────
-    fetch_publisher_models: lambda do |connection, publisher = 'google'|
-      # Build the cache key (incl all relevant param to ensure regions/publishers are cached separately)
-      region = connection['region'].presence || 'us-central1'
-      include_preview = connection['include_preview_models'] || false
-      cache_key = "models_#{region}_#{publisher}_preview_#{include_preview}"
-
-      # Try for a cache hit (using Workato's built-in caching)
-      begin
-        cached_data = workato.cache.get(cache_key)
-        if cached_data.present?
-          # Check if cache is still fresh (we'll cache for 1 hour)
-          cache_time = Time.parse(cached_data['cached_at'])
-          if cache_time > 1.hour.ago
-            puts "Using cached model list (#{cached_data['models'].length} models, cached #{((Time.now - cache_time) / 60).round} minutes ago)"
-            return cached_data['models']
-          else
-            puts "Model cache expired, refreshing..."
-          end
-        end
-      rescue => e
-        # If cache access fails, continue without it
-        puts "Cache access failed: #{e.message}, fetching fresh data"
-      end
-      
-      # Fetch fresh models from the API
-      models = call('fetch_fresh_publisher_models', connection, publisher, region)
-      
-      # Cache the results if we got any
-      if models.present?
-        begin
-          cache_data = {
-            'models' => models,
-            'cached_at' => Time.now.iso8601,
-            'count' => models.length
-          }
-          # Cache for 1 hour (3600 seconds)
-          workato.cache.set(cache_key, cache_data, 3600)
-          puts "Cached #{models.length} models for future use"
-        rescue => e
-          puts "Failed to cache models: #{e.message}"
-        end
-      end
-      
-      models
-    end,
-    fetch_fresh_publisher_models: lambda do |connection, publisher, region|
-      # Use the regional service endpoint; list is in v1beta1.
-      # Docs: publishers.models.list (v1beta1), supports 'view' and pagination.
-      # https://cloud.google.com/vertex-ai/docs/reference/rest/v1beta1/publishers.models/list
-      host = "https://#{region}-aiplatform.googleapis.com"
-      url = "#{host}/v1beta1/publishers/#{publisher}/models"
-      
-      models = []
-      page_token = nil
-      pages_fetched = 0
-      max_pages = 5  # Reduced from 10 for faster response
-      total_api_time = 0
-      
-      begin
-        loop do
-          pages_fetched += 1
-          
-          # Stop if we've fetched enough pages
-          if pages_fetched > max_pages
-            puts "Reached maximum page limit (#{max_pages}), stopping model fetch"
-            break
-          end
-          
-          # Time each API call for monitoring
-          api_start = Time.now
-          
-          resp = get(url).
-            params(
-              page_size: 500,  # Increased from 200 - get more models per request
-              page_token: page_token,
-              view: 'PUBLISHER_MODEL_VIEW_BASIC',  # Changed from FULL - we only need basic info
-              # filter: build_model_filter(connection)  # << server-side filtering is limited, stick to client-side
-            ).
-            after_error_response(/.*/) do |code, body, _hdrs, message|
-              # Log but don't fail completely
-              if connection['verbose_errors']
-                puts "Model listing failed (HTTP #{code}): #{body}"
-              else
-                puts "Model listing failed (HTTP #{code}) - using static fallback"
-              end
-              raise "API Error"
-            end
-          
-          api_time = Time.now - api_start
-          total_api_time += api_time
-          
-          batch = resp['publisherModels'] || []
-          models.concat(batch)
-          
-          puts "Fetched page #{pages_fetched}: #{batch.length} models in #{api_time.round(2)}s"
-          
-          # Check for pagination
-          page_token = resp['nextPageToken']
-          
-          # Smart early exit - if we have enough models, stop fetching
-          if models.length >= 100 && !connection['fetch_all_models']
-            puts "Have #{models.length} models, stopping early for performance"
-            break
-          end
-          
-          break if page_token.blank? || batch.empty?
-        end
-        
-        puts "Total model fetch: #{models.length} models in #{total_api_time.round(2)}s across #{pages_fetched} pages"
-        models
-        
-      rescue => e
-        puts "Failed to fetch models from API: #{e.message}"
-        # Return empty array to trigger static fallback
-        []
-      end
-    end,
-    validate_publisher_model!: lambda do |connection, model_name|
-      # Early exit conditions (no need to validate in input absent or validation disabled)
-      return if model_name.blank?
-      return unless connection['validate_model_on_run']
-      
-      # This is the caching mechanism - @validated_models persists within a single execution
-      # In Workato, instance variables (@) live for the duration of one recipe execution
-      @validated_models ||= {}
-
-      # Create a unique cache key that includes both region and model (model avail can vary by region)
-      cache_key = "#{connection['region']}/#{model_name}"
-      
-      # Check cache first - if we've already validated this exact model in this region, skip
-      if @validated_models[cache_key]
-        # Add logging for debugging
-        puts "Model #{model_name} already validated in #{connection['region']}, using cache"
-        return
-      end
-      
-      # 1. Validate model name format first (no API call needed)
-      # regex checks for the pattern: publishers/{publisher}/models/{model}
-      unless model_name.match?(/^publishers\/[^\/]+\/models\/[^\/]+$/)
-        error("Invalid model name format: #{model_name}\n" \
-              "Expected format: publishers/{publisher}/models/{model}\n" \
-              "Example: publishers/google/models/gemini-1.5-pro")
-      end
-      
-      # Verify the model actually exists
-      region = connection['region'].presence || 'us-central1'
-      
-      # Build the validation URL (v1 endpoint for model metadata)
-      url = "https://#{region}-aiplatform.googleapis.com/v1/#{model_name}"
-
-      begin
-        # Make the validation request with specific error handling
-        resp = get(url).
-          params(view: 'PUBLISHER_MODEL_VIEW_BASIC').  # Changed from FULL to BASIC for speed
-          after_error_response(/404/) do |code, body, _hdrs, message|
-            # Model not found - provide helpful context about what might be wrong
-            error("Model '#{model_name}' not found in region '#{region}'.\n" \
-                  "Possible issues:\n" \
-                  "• Model name typo (check spelling carefully)\n" \
-                  "• Model not available in #{region} (try us-central1)\n" \
-                  "• Model deprecated or renamed\n" \
-                  "• Using preview model without enabling preview models in connection")
-          end.
-          after_error_response(/403/) do |code, body, _hdrs, message|
-            # Permission denied - guide user to fix their setup
-            error("Access denied to model '#{model_name}'.\n" \
-                  "To fix this:\n" \
-                  "1. Verify Vertex AI API is enabled in Google Cloud Console\n" \
-                  "2. Check service account has 'Vertex AI User' role\n" \
-                  "3. Ensure billing is enabled for your project\n" \
-                  "4. Confirm project ID is correct: #{connection['project']}")
-          end.
-          after_error_response(/.*/) do |code, body, _hdrs, message|
-            # Use the centralized error handler for other errors
-            call('handle_vertex_error', connection, code, body, message)
-          end
-        
-        # Additional validation: Check if model is GA when preview models aren't allowed
-        unless connection['include_preview_models']
-          stage = resp['launchStage'].to_s
-          if stage.present? && stage != 'GA'
-            error("Model '#{model_name}' is in #{stage} stage (not Generally Available).\n" \
-                  "To use preview models:\n" \
-                  "1. Go to your connection settings\n" \
-                  "2. Enable 'Include preview/experimental models'\n" \
-                  "3. Save and retry\n\n" \
-                  "Note: Preview models may have different pricing and stability")
-          end
-        end
-        
-        # Success! Cache the validation result
-        @validated_models[cache_key] = {
-          validated_at: Time.now,
-          launch_stage: resp['launchStage'],
-          model_version: resp['versionId']
-        }
-        
-        puts "Model #{model_name} validated successfully in #{region}"
-        
-      rescue => e
-        # If anything goes wrong, provide a clear error message
-        error("Model validation failed: #{e.message}\n" \
-              "This usually means a temporary network issue. Try again in a moment.")
-      end
-    end,
-    # - Partition models by capability.
-    vertex_model_bucket: lambda do |model_id|
-      id = model_id.to_s.downcase
-
-      # Use a hash for 0(1) lookup instead of multiple str includes
-      @model_categories ||= {
-        'embedding' => %w[embedding gecko multimodalembedding embeddinggemma],
-        'image' => %w[vision imagegeneration imagen],
-        'audio' => %w[tts audio speech],
-        'code' => %w[code codey],
-        'chat' => %w[chat],
-        'text' => []  # Default category
-      }
-
-      # Find the category for this model
-      @model_categories.each do |category, keywords|
-        return category.to_sym if keywords.any? { |keyword| id.include?(keyword) }
-      end
-    
-      :text # default to text if no match
-    end,
-    # - Sort model options by version, tier, then alphabetically      
-    sort_model_options: lambda do |options|
-      options.sort_by do |label, value|
-        # Extract version number if present
-        version_match = label.match(/(\d+)\.(\d+)/)
-        major_version = version_match ? version_match[1].to_i : 0
-        minor_version = version_match ? version_match[2].to_i : 0
-        
-        # Determine model tier
-        tier = case label
-              when /\bPro\b/i then 0
-              when /\bFlash\b/i then 1  
-              when /\bLite\b/i then 2
-              else 3
-              end
-        
-        # Sort by: version (desc), tier, then alphabetical
-        [
-          -major_version,  # Newest version first
-          -minor_version,  # Higher minor version first
-          tier,            # Pro > Flash > Lite
-          label            # Alphabetical as tiebreaker
-        ]
-      end
-    end,
-    # - Filter/sort + convert to picklist options [label, value]
-    to_model_options: lambda do |models, bucket:, include_preview: false|
-      return [] if models.blank?
-      
-      # Pre-compile the regex for retired models to avoid recompiling
-      retired_pattern = /(^|-)1\.0-|text-bison|chat-bison/
-    
-      # Filter models efficiently
-      filtered = models.select do |m|
-        model_id = m['name'].to_s.split('/').last
-        next false if model_id.blank?
-        
-        # Skip retired models
-        next false if model_id =~ retired_pattern
-        
-        # Check bucket match
-        next false unless call('vertex_model_bucket', model_id) == bucket
-        
-        # Check GA status if needed
-        if !include_preview
-          stage = m['launchStage'].to_s
-          next false unless stage == 'GA' || stage.blank?
-        end
-        
-        true
-      end
-      
-      # Extract unique model IDs efficiently
-      seen_ids = Set.new
-      unique_models = filtered.select do |m|
-        id = m['name'].to_s.split('/').last
-        seen_ids.add?(id)  # Returns true if added (wasn't present), false if already present
-      end
-      
-      # Build options with better sorting
-      options = unique_models.map do |m|
-        id = m['name'].to_s.split('/').last
-        # Create a human-friendly label
-        label = create_model_label(id, m)
-        [label, "publishers/google/models/#{id}"]
-      end
-      
-      # Sort with a more sophisticated algorithm
-      sort_model_options(options)
-    end,
-    # - Context-aware model label creation
-    create_model_label: lambda do |model_id, model_metadata = {}|
-      # Start with the basic formatting
-      label = model_id.gsub('-', ' ').split.map { |word| 
-        # Keep version numbers as-is, capitalize other words
-        word =~ /^\d/ ? word : word.capitalize 
-      }.join(' ')
-      
-      # Add helpful context if available
-      if model_metadata['launchStage'].present? && model_metadata['launchStage'] != 'GA'
-        label += " (#{model_metadata['launchStage']})"
-      end
-      
-      label
-    end,
-    # - Picklist generator with static fallback
-    dynamic_model_picklist: lambda do |connection, bucket, static_fallback|
-      # 1. Check if dynamic models are enabled (return to static if not)
-      unless connection['dynamic_models']
-        puts "Dynamic models disabled, using static list"
-        return static_fallback
-      end
-
-      # 2. Fetch models (with caching)
-      begin
-        models = call('fetch_publisher_models', connection, 'google')
-        
-        if models.present?
-          # Convert to options
-          options = call('to_model_options', models,
-                        bucket: bucket,
-                        include_preview: connection['include_preview_models'])
-          
-          # 3. Ensure we have options, otherwise fall back
-          if options.present?
-            puts "Returning #{options.length} dynamic models for #{bucket}"
-            return options
-          else
-            puts "No models matched criteria for #{bucket}, using static list"
-            return static_fallback
-          end
-        end
-      rescue => e
-        puts "Error in dynamic model fetch: #{e.message}"
-      end
-      
-      # 4. Ultimate fallback to static list
-      puts "All dynamic fetch attempts failed, using static list"
-      static_fallback
-    end,
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # -- Workato Data Tables
-    # ─────────────────────────────────────────────────────────────────────────────
-    ensure_workato_api!: lambda do |connection|
-      missing = []
-      missing << 'workato_api_token' if connection['workato_api_token'].blank?
-      error("To use 'Workato data table' as rules source, please configure connection fields: #{missing.join(', ')}") if missing.present?
-    end,
-    workato_api_headers: lambda do |connection|
-      {
-        'Authorization' => "Bearer #{connection['workato_api_token']}",
-        'Content-Type'  => 'application/json'
-      }
-    end,
-    workato_api_base: lambda do |connection|
-      host = connection['workato_api_host'].presence || 'https://app.workato.com'
-      host.gsub(%r{/\z}, '')
-    end,
-    list_datatables: lambda do |connection|
-      resp = call('workato_get', connection, '/api/v1/tables')
-      resp
-    end,
-    list_datatable_columns: lambda do |connection, table_id|
-      error("Data table is required.") if table_id.to_s.strip.blank?
-      call('workato_get', connection, "/api/v1/tables/#{table_id}")
-    end,
-    fetch_datatable_rows: lambda do |connection, table_id, limit = 1000|
-      error("Data table is required.") if table_id.to_s.strip.blank?
-      rows  = []
-      token = nil
-
-      while rows.length < limit
-        body = {
-          select: nil,  # all columns
-          where:  nil,
-          order:  nil,
-          limit:  [200, limit - rows.length].min,
-          continuation_token: token
-        }.compact
-
-        resp  = call('workato_post', connection, "/api/v1/tables/#{table_id}/records/query", body)
-        batch = resp['records'] || resp['data'] || []
-        rows.concat(batch)
-        token = resp['continuation_token']
-        break if token.blank? || batch.empty?
-      end
-
-      rows
-    end,
-    cached_table_rows: lambda do |connection, table_id, limit = 2000|
-      cache_key = "dt_rows_#{call('workato_api_base', connection)}_#{table_id}"
-      cached    = workato.cache.get(cache_key)
-      if cached.present?
-        ts = Time.parse(cached['cached_at']) rescue nil
-        if ts && ts > 60.seconds.ago
-          return cached['rows']
-        end
-      end
-      rows = call('fetch_datatable_rows', connection, table_id, limit)
-      workato.cache.set(cache_key, { 'rows' => rows, 'cached_at' => Time.now.iso8601 }, 60) rescue nil
-      rows
-    end,
-    load_categories_from_table: lambda do |connection, input|
-      rules_table_id  = input['rules_table_id'].to_s.strip
-      category_column = input['category_column'].to_s.strip
-      rule_column     = input['rule_column'].to_s.strip
-
-      error('Data table is required.') if rules_table_id.blank?
-      error('Category column is required.') if category_column.blank?
-
-      # Validate columns
-      table_info   = call('list_datatable_columns', connection, rules_table_id)
-      columns      = table_info['columns'] || table_info.dig('data_table', 'columns') || []
-      column_names = columns.map { |c| c['name'] }
-
-      unless column_names.include?(category_column)
-        error("Category column '#{category_column}' not found. Available: #{column_names.join(', ')}")
-      end
-      if rule_column.present? && !column_names.include?(rule_column)
-        error("Rule column '#{rule_column}' not found. Available: #{column_names.join(', ')}")
-      end
-      if input['only_active'] && input['active_column'].present?
-        active_col = input['active_column']
-        unless column_names.include?(active_col)
-          error("Active column '#{active_col}' not found. Available: #{column_names.join(', ')}")
-        end
-      end
-
-      # Fetch rows (cached briefly for UX)
-      rows = call('cached_table_rows', connection, rules_table_id, 2000)
-
-      # Filter by "active" if requested
-      if input['only_active'] && input['active_column'].present?
-        active_col = input['active_column']
-        rows = rows.select { |r| call('truthy?', r[active_col]) }
-      end
-
-      # Project into category/rule strings
-      categories = rows.map do |r|
-        key = r[category_column]
-        next nil if key.blank?
-        if rule_column.present?
-          rule = r[rule_column]
-          rule.present? ? "#{key} - #{rule}" : key.to_s
-        else
-          key.to_s
-        end
-      end.compact.uniq
-
-      error("No valid categories found in the table. Check your data and column mappings.") if categories.empty?
-      categories
-    end,
-    get_cached_datatables: lambda do |connection|
-      cache_key = "datatables_#{connection['workato_api_host']}"
-      cached = workato.cache.get(cache_key)
-      
-      if cached.present?
-        cache_time = Time.parse(cached['cached_at'])
-        if cache_time > 5.minutes.ago
-          puts "Using cached datatables (#{cached['count']} tables)"
-          return cached['tables']
-        end
-      end
-      
-      # Fetch fresh data
-      tables = call('fetch_fresh_datatables', connection)
-      
-      # Cache if successful
-      if tables.present?
-        workato.cache.set(cache_key, {
-          'tables' => tables,
-          'cached_at' => Time.now.iso8601,
-          'count' => tables.length
-        }, 300)  # 5 minute cache
-      end
-      
-      tables
-    end,
-    get_cached_table_columns: lambda do |connection, table_id|
-      return [] if table_id.blank?
-      
-      cache_key = "table_cols_#{connection['workato_api_host']}_#{table_id}"
-      cached = workato.cache.get(cache_key)
-      
-      if cached.present?
-        cache_time = Time.parse(cached['cached_at'])
-        if cache_time > 10.minutes.ago
-          puts "Using cached columns for table #{table_id}"
-          return cached['columns']
-        end
-      end
-      
-      # Fetch fresh column data
-      columns = call('fetch_table_columns', connection, table_id)
-      
-      # Cache the results
-      if columns.present?
-        workato.cache.set(cache_key, {
-          'columns' => columns,
-          'cached_at' => Time.now.iso8601
-        }, 600)  # 10 minute cache
-      end
-      
-      columns
-    end,
-    # Direct fetch methods (no caching)
-    fetch_fresh_datatables: lambda do |connection|
-      response = call('workato_get', connection, '/api/v1/tables')
-      tables = response['data_tables'] || response || []
-      puts "Fetched #{tables.length} datatables from API"
-      tables
-    end,
-    fetch_table_columns: lambda do |connection, table_id|
-      response = call('workato_get', connection, "/api/v1/tables/#{table_id}")
-      columns = response['columns'] || response.dig('data_table', 'columns') || []
-      puts "Fetched #{columns.length} columns for table #{table_id}"
-      columns
-    end,
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # -- Payload construction
-    # ─────────────────────────────────────────────────────────────────────────────
-    # = BASE PAYLOAD BUILDER =
-    build_base_payload: lambda do |instruction, user_content, safety_settings = nil, options = {}|
-      # Build the base structure
-      payload = {
-        'systemInstruction' => {
-          'role' => 'model',
-          'parts' => [{ 'text' => instruction }]
-        },
-        'contents' => [
-          {
-            'role' => 'user',
-            'parts' => if user_content.is_a?(Array)
-              user_content  # Allow passing pre-built parts array
-            else
-              [{ 'text' => user_content }]  # Default to text part
-            end
-          }
-        ],
-        'generationConfig' => options['generationConfig'] || { 'temperature' => 0 }
-      }
-      
-      # Add safety settings if provided
-      payload['safetySettings'] = safety_settings if safety_settings.present?
-      
-      # Allow additional top-level fields through options
-      options.except('generationConfig').each do |key, value|
-        payload[key] = value if value.present?
-      end
-      
-      payload.compact
-    end,
-    build_conversation_payload: lambda do |input|
-      # Handle generation config with response schema
-      if input&.dig('generationConfig', 'responseSchema').present?
-        input['generationConfig']['responseSchema'] = 
-          parse_json(input.dig('generationConfig', 'responseSchema'))
-      end
-      
-      # Handle tools with function declarations
-      if input['tools'].present?
-        input['tools'] = input['tools'].map do |tool|
-          if tool['functionDeclarations'].present?
-            tool['functionDeclarations'] = tool['functionDeclarations'].map do |function|
-              if function['parameters'].present?
-                function['parameters'] = parse_json(function['parameters'])
-              end
-              function
-            end.compact
-          end
-          tool
-        end.compact
-      end
-      
-      # Build contents based on message type
-      contents = if input['message_type'] == 'single_message'
-        [{
-          'role' => 'user',
-          'parts' => [{ 'text' => input.dig('messages', 'message') }]
-        }]
-      else
-        input.dig('messages', 'chat_transcript')&.map do |m|
-          {
-            'role' => m['role'],
-            'parts' => call('build_message_parts', m)
-          }
-        end
-      end
-      
-      # Build the final payload
-      {
-        'contents' => contents,
-        'generationConfig' => input['generationConfig'],
-        'systemInstruction' => input['systemInstruction'],
-        'tools' => input['tools'],
-        'toolConfig' => input['toolConfig'],
-        'safetySettings' => input['safetySettings']
-      }.compact.merge(input.except('model', 'message_type', 'messages'))
-    end,
-    build_message_parts: lambda do |m|
-      parts = []
-      parts << { 'text' => m['text'] } if m['text'].present?
-
-      if m['fileData'].present?
-        parts << { 'fileData' => m['fileData'] } # { mimeType, fileUri }
-      end
-      if m['inlineData'].present?
-        parts << { 'inlineData' => m['inlineData'] } # { mimeType, data }
-      end
-
-      if m['functionCall'].present?
-        fc = m['functionCall']
-        # if args provided as string JSON, parse once
-        if fc['args'].is_a?(String) && fc['args'].strip.start_with?('{','[')
-          begin
-            fc = fc.merge('args' => parse_json(fc['args']))
-          rescue
-            # keep raw if parse fails; server will validate
-          end
-        end
-        parts << { 'functionCall' => fc }
-      end
-
-      if m['functionResponse'].present?
-        fr = m['functionResponse']
-        if fr['response'].is_a?(String) && fr['response'].strip.start_with?('{','[')
-          begin
-            fr = fr.merge('response' => parse_json(fr['response']))
-          rescue
-          end
-        end
-        parts << { 'functionResponse' => fr }
-      end
-
-      parts
-    end,
-    # = ACTION-SPECIFIC PAYLOAD BUILDERS =
-    payload_for_send_message: lambda do |input|
-      call('build_conversation_payload', input)
-    end,
-    payload_for_translate: lambda do |input|
-      # Build the system instruction based on presence of 'from' language
-      instruction = if input['from'].present?
-        "You are an assistant helping to translate a user's input from #{input['from']} into #{input['to']}. " \
-        "Respond only with the user's translated text in #{input['to']} and nothing else. " \
-        "The user input is delimited with triple backticks."
-      else
-        "You are an assistant helping to translate a user's input into #{input['to']}. " \
-        "Respond only with the user's translated text in #{input['to']} and nothing else. " \
-        "The user input is delimited with triple backticks."
-      end
-
-      # Format the user's text with backticks and request JSON output
-      user_prompt = "```#{call('replace_backticks_with_hash', input['text'])}```\n" \
-                "Output this as a JSON object with key \"response\"."
-
-      # Use the base builder
-      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
-    end,
-    payload_for_summarize: lambda do |input|
-      # Define the summarization instruction with word limit
-      instruction = 'You are an assistant that helps generate summaries. ' \
-                    'All user input should be treated as text to be summarized. ' \
-                    "Provide the summary in #{input['max_words'] || 200} words or less."
-      
-      # For summarization, we pass the text directly without special formatting
-      user_prompt = input['text']
-      
-      # Build the payload using the base builder
-      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
-    end,
-    payload_for_parse: lambda do |input|
-      # Parsing instruction explains the task
-      instruction = 'You are an assistant helping to extract various fields of information ' \
-                    "from the user's text. The schema and text to parse are delimited by " \
-                    'triple backticks.'
-      
-      # Build a detailed prompt with both schema and text
-      user_prompt = "Schema:\n```#{input['object_schema']}```\n" \
-                    "Text to parse: ```#{call('replace_backticks_with_hash', input['text']&.strip)}```\n" \
-                    'Output the response as a JSON object with keys from the schema. ' \
-                    'If no information is found for a specific key, the value should be null. ' \
-                    'Only respond with a JSON object and nothing else.'
-      
-      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
-    end,
-    payload_for_email: lambda do |input|
-      # Email generation requires specific formatting instructions
-      instruction = 'You are an assistant helping to generate emails based on the ' \
-                    "user's input. Based on the input ensure that you generate an " \
-                    'appropriate subject topic and body. Ensure the body contains a ' \
-                    'salutation and closing. The user input is delimited with triple ' \
-                    'backticks. Use it to generate an email and perform no other actions.'
-      
-      # Format the email request with clear output requirements
-      user_prompt = "User description:```#{call('replace_backticks_with_hash', input['email_description'])}```\n" \
-                    "Output the email from the user description as a JSON object with keys " \
-                    'for "subject" and "body". If an email cannot be generated, input null for the keys.'
-      
-      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
-    end,
-    payload_for_categorize: lambda do |connection, input|
-      # Load categories from Workato table or use provided categories
-      categories_arr =
-        if input['rules_source'] == 'workato_table'
-          call('load_categories_from_table', connection, input) # explicitly pass connection
-        else
-          (input['categories'] || []).map { |c| c['rule'].present? ? "#{c['key']} - #{c['rule']}" : c['key'].to_s }
-        end
-      categories_text = categories_arr&.join("\n") # use newline, not \n in str
-      
-      # Build instruction based on the existence of rules
-      instruction = if input['rules_source'] != 'workato_table' && 
-                      input['categories'].present? && 
-                      input['categories'].all? { |c| c['rule'].present? }
-        'You are an assistant helping to categorize text into the various categories mentioned. ' \
-        'Respond with only the category name. The categories and text to classify are delimited ' \
-        'by triple backticks. The category information is provided as "Category name: Rule". ' \
-        'Use the rule to classify the text appropriately into one single category.'
-      else
-        'You are an assistant helping to categorize text into the various categories mentioned. ' \
-        'Respond with only one category name. The categories and text to classify are delimited ' \
-        'by triple backticks.'
-      end
-
-      # Build the categorization prompt
-      user_prompt = "Categories:\n```#{categories_text}```\n" \
-                    "Text to classify: ```#{call('replace_backticks_with_hash', input['text']&.strip)}```\n" \
-                    'Output the response as a JSON object with key "response". ' \
-                    'If no category is found, the "response" value should be null. ' \
-                    'Only respond with a JSON object and nothing else.'
-      
-      # Use the base payload builder
-      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
-    end,
-    payload_for_analyze: lambda do |input|
-      # Analysis requires staying within provided information
-      instruction = 'You are an assistant helping to analyze the provided information. ' \
-                    'Take note to answer only based on the information provided and nothing else. ' \
-                    'The information to analyze and query are delimited by triple backticks.'
-      
-      # Format both the text and question clearly
-      user_prompt = "Information to analyze:```#{call('replace_backticks_with_hash', input['text'])}```\n" \
-                    "Query:```#{call('replace_backticks_with_hash', input['question'])}```\n" \
-                    "If you don't understand the question or the answer isn't in the " \
-                    'information to analyze, input the value as null for "response". ' \
-                    'Only return a JSON object.'
-      
-      call('build_base_payload', instruction, user_prompt, input['safetySettings'])
-    end,
-    payload_for_analyze_image: lambda do |input|
-      # We can't use the base builder since we have to pass image data in parts
-      {
-        'contents' => [
-          {
-            'role' => 'user',
-            'parts' => [
-              {
-                'text' => input['question']
-              },
-              {
-                'inlineData' => {
-                  'mimeType' => input['mime_type'],
-                  'data' => input['image']&.encode_base64
-                }
-              }
-            ]
-          }
-        ],
-        'generationConfig' => {
-          'temperature' => 0
-        },
-        'safetySettings' => input['safetySettings'].presence
-      }.compact
-    end,
-    payload_for_text_embedding: lambda do |input|
-      {
-        'instances' => [
-          {
-            'task_type' => input['task_type'].presence,
-            'title' => input['title'].presence,
-            'content' => input['text']
-          }.compact
-        ]
-      }
-    end,
-    payload_for_find_neighbors: lambda do |input|
-      # We follow Google’s JSON casing for FindNeighbors REST:
-      # top-level: deployedIndexId, returnFullDatapoint, queries[]
-      # queries[].datapoint.*: datapointId, featureVector, sparseEmbedding, restricts, numericRestricts, crowdingTag
-      #
-      # Numeric restricts accept ONE of valueInt/valueFloat/valueDouble with 'op' enum.
-      queries = (input['queries'] || []).map do |q|
-        dp = q['datapoint'] || {}
-
-        # Pass through as-is; assume UI provided correct shapes/casing.
-        {
-          'datapoint' => {
-            'datapointId'     => dp['datapointId'].presence,
-            'featureVector'   => dp['featureVector'].presence,
-            'sparseEmbedding' => dp['sparseEmbedding'].presence, # { values: [Float], dimensions: [Integer] }
-            'restricts'       => dp['restricts'].presence,       # [{ namespace, allowList[], denyList[] }]
-            'numericRestricts'=> dp['numericRestricts'].presence,# [{ namespace, op, valueInt|valueFloat|valueDouble }]
-            'crowdingTag'     => dp['crowdingTag'].presence      # { crowdingAttribute }
-          }.compact,
-          'neighborCount'                          => q['neighborCount'],
-          'approximateNeighborCount'               => q['approximateNeighborCount'],
-          'perCrowdingAttributeNeighborCount'      => q['perCrowdingAttributeNeighborCount'],
-          'fractionLeafNodesToSearchOverride'      => q['fractionLeafNodesToSearchOverride'],
-          'rrf'                                    => q['rrf'].presence # optional future-proofing; if you need RRF fusion
-        }.compact
-      end
-
-      {
-        'deployedIndexId'      => input['deployedIndexId'],
-        'queries'              => queries,
-        'returnFullDatapoint'  => !!input['returnFullDatapoint']
-      }.compact
-    end,
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # -- Response extraction and normalization
-    # ─────────────────────────────────────────────────────────────────────────────
     extract_json: lambda do |resp|
       json_txt = resp&.dig('candidates', 0, 'content', 'parts', 0, 'text')
-      return {} if json_txt.blank?
-
-      # Cleanup markdown code blocks
-      json = json_txt.gsub(/^```(?:json|JSON)?\s*\n?/, '')  # Remove opening fence
-                    .gsub(/\n?```\s*$/, '')                # Remove closing fence
-                    .gsub(/`+$/, '')                       # Remove any trailing backticks
-                    .strip
-
-      begin
-        parse_json(json) || {}
-      rescue => e
-        # Log error for debugging, but return empty hash to prevent action failure
-        puts "JSON parsing failed: #{e.message}. Raw text: #{json_txt}"
-        {}
-      end
+      json = json_txt&.gsub(/```json|```JSON|`+$/, '')&.strip
+      parse_json(json) || {}
     end,
     get_safety_ratings: lambda do |ratings|
       {
@@ -1791,13 +627,13 @@
     extract_generic_response: lambda do |resp, is_json_response|
       call('check_finish_reason', resp.dig('candidates', 0, 'finishReason'))
       ratings = call('get_safety_ratings', resp.dig('candidates', 0, 'safetyRatings'))
-      return({ 'answer' => 'N/A', 'safety_ratings' => {} }) if ratings.blank?
+      next { 'answer' => 'N/A', 'safety_ratings' => {} } if ratings.blank?
 
       answer = if is_json_response
-                call('extract_json', resp)&.[]('response')
-              else
-                resp&.dig('candidates', 0, 'content', 'parts', 0, 'text')
-              end
+                 call('extract_json', resp)&.[]('response')
+               else
+                 resp&.dig('candidates', 0, 'content', 'parts', 0, 'text')
+               end
       {
         'answer' => answer,
         'safety_ratings' => ratings,
@@ -1825,14 +661,336 @@
                  'usage' => resp['usageMetadata'])
     end,
     extract_embedding_response: lambda do |resp|
-      vals = resp&.dig('predictions', 0, 'embeddings', 'values') ||
-            resp&.dig('predictions', 0, 'embeddings')&.first&.dig('values') ||
-            []
-      { 'embedding' => vals.map { |v| { 'value' => v } } }
+      { 'embedding' => resp&.dig('predictions', 0, 'embeddings', 'values')&.
+        map do |embedding|
+        { 'value' => embedding }
+      end }
     end,
- 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # -- Samples and UX helpers
+    payload_for_send_message: lambda do |input|
+      if input&.dig('generationConfig', 'responseSchema').present?
+        parsed = parse_json(input.dig('generationConfig', 'responseSchema'))
+        input['generationConfig'] = input['generationConfig']&.map do |key, value|
+          if key == 'responseSchema'
+            { key => parsed }
+          else
+            { key => value }
+          end
+        end&.inject(:merge)
+      end
+
+      if input['tools'].present?
+        input['tools']&.map do |tool|
+          if tool['functionDeclarations'].present?
+            tool['functionDeclarations']&.map do |function|
+              if function['parameters'].present?
+                function['parameters'] = parse_json(function['parameters'])
+              end
+              function
+            end&.compact
+          end
+          tool
+        end&.compact
+      end
+
+      messages = input['messages']
+      input['contents'] = if input['message_type'] == 'single_message'
+                            [
+                              {
+                                'role' => 'user',
+                                'parts' => [
+                                  {
+                                    'text' => messages['message']
+                                  }
+                                ].compact
+                              }
+                            ]
+                          else
+                            messages&.[]('chat_transcript')&.map do |m|
+                              {
+                                'role' => m['role'],
+                                'parts' => [
+                                  {
+                                    'text' => m['text']
+                                  }.compact.presence,
+                                  {
+                                    'fileData' => m['fileData']
+                                  }.compact.presence,
+                                  {
+                                    'inlineData' => m['inlineData']
+                                  }.compact.presence,
+                                  {
+                                    'functionCall' => m['functionCall']&.map do |key, value|
+                                      if key == 'args'
+                                        { key => parse_json(value) }
+                                      else
+                                        { key => value }
+                                      end
+                                    end&.inject(:merge)
+                                  }.compact.presence,
+                                  {
+                                    'functionResponse' => m['functionResponse']&.map do |key, value|
+                                      if key == 'response'
+                                        { key => parse_json(value) }
+                                      else
+                                        { key => value }
+                                      end
+                                    end&.inject(:merge)
+                                  }.compact.presence
+                                ].compact
+                              }.compact
+                            end
+                          end
+      input.except('model', 'message_type', 'messages', 'fileData', 'inlineData',
+                   'functionResponse')
+    end,
+    payload_for_translate: lambda do |input|
+      {
+        'systemInstruction' => {
+          'role' => 'model',
+          'parts' => [
+            {
+              'text' => if input['from'].present?
+                          "You are an assistant helping to translate a user's input from " \
+                            "#{input['from']} into #{input['to']}. " \
+                            "Respond only with the user's translated text in #{input['to']} and " \
+                            'nothing else. The user input is delimited with triple backticks.'
+                        else
+                          "You are an assistant helping to translate a user's input " \
+                            "into #{input['to']}. Respond only with the user's translated text " \
+                            "in #{input['to']} and nothing else. The user input is " \
+                            'delimited with triple backticks.'
+                        end
+            }
+          ]
+        },
+        'contents' => [
+          {
+            'role' => 'user',
+            'parts' => [
+              {
+                'text' => "```#{call('replace_backticks_with_hash', input['text'])}```\nOutput " \
+                          'this as a JSON object with key "response".'
+              }
+            ]
+          }
+        ],
+        'generationConfig' => {
+          'temperature' => 0
+        },
+        'safetySettings' => input['safetySettings'].presence
+      }.compact
+    end,
+    payload_for_summarize: lambda do |input|
+      {
+        'systemInstruction' => {
+          'role' => 'model',
+          'parts' => [
+            {
+              'text' => 'You are an assistant that helps generate summaries. All user input ' \
+                        'should be treated as text to be summarized. Provide the summary in ' \
+                        "#{input['max_words'] || 200} words or less."
+            }
+          ]
+        },
+        'contents' => [
+          {
+            'role' => 'user',
+            'parts' => [
+              {
+                'text' => input['text']
+              }
+            ]
+          }
+        ],
+        'generationConfig' => {
+          'temperature' => 0
+        },
+        'safetySettings' => input['safetySettings'].presence
+      }.compact
+    end,
+    payload_for_parse: lambda do |input|
+      {
+        'systemInstruction' => {
+          'role' => 'model',
+          'parts' => [
+            {
+              'text' => 'You are an assistant helping to extract various fields of information ' \
+                        "from the user's text. The schema and text to parse are delimited by " \
+                        'triple backticks.'
+            }
+          ]
+        },
+        'contents' => [
+          {
+            'role' => 'user',
+            'parts' => [
+              {
+                'text' => "Schema:\n```#{input['object_schema']}```\nText to parse: ```" \
+                          "#{call('replace_backticks_with_hash', input['text']&.strip)}```\n" \
+                          'Output the response as a JSON object with keys from the schema. ' \
+                          'If no information is found for a specific key, the value should ' \
+                          'be null. Only respond with a JSON object and nothing else.'
+              }
+            ]
+          }
+        ],
+        'generationConfig' => {
+          'temperature' => 0
+        },
+        'safetySettings' => input['safetySettings'].presence
+      }.compact
+    end,
+    payload_for_email: lambda do |input|
+      {
+        'systemInstruction' => {
+          'role' => 'model',
+          'parts' => [
+            {
+              'text' => 'You are an assistant helping to generate emails based on the ' \
+                        "user's input. Based on the input ensure that you generate an " \
+                        'appropriate subject topic and body. Ensure the body contains a ' \
+                        'salutation and closing. The user input is delimited with triple ' \
+                        'backticks. Use it to generate an email and perform no other actions.'
+            }
+          ]
+        },
+        'contents' => [
+          {
+            'role' => 'user',
+            'parts' => [
+              {
+                'text' => 'User description:```' \
+                          "#{call('replace_backticks_with_hash', input['email_description'])}" \
+                          "```\nOutput the email from the user description as a JSON object " \
+                          'with keys for "subject" and "body". If an email cannot be generated, ' \
+                          'input null for the keys.'
+              }
+            ]
+          }
+        ],
+        'generationConfig' => {
+          'temperature' => 0
+        },
+        'safetySettings' => input['safetySettings'].presence
+      }.compact
+    end,
+    payload_for_categorize: lambda do |input|
+      categories = input['categories']&.map&.with_index do |c, _|
+                     if c['rule'].present?
+                       "#{c['key']} - #{c['rule']}"
+                     else
+                       c['key']&.to_s
+                     end
+                   end&.join('\n')
+      {
+        'systemInstruction' => {
+          'role' => 'model',
+          'parts' => [
+            {
+              'text' => if input['categories'].all? { |arr| arr['rule'].present? }
+                          'You are an assistant helping to categorize text into the various ' \
+                            'categories mentioned. Respond with only the category name. The ' \
+                            'categories and text to classify are delimited by triple backticks.' \
+                            'The category information is provided as “Category name: Rule”. Use ' \
+                            'the rule to classify the text appropriately into one single category. ' \
+                            'to identify the fields in the text.'
+                        else
+                          'You are an assistant helping to categorize text into the various ' \
+                            'categories mentioned. Respond with only one category name. The ' \
+                            'categories and text to classify are delimited by triple backticks.'
+                        end
+            }
+          ]
+        },
+        'contents' => [
+          {
+            'role' => 'user',
+            'parts' => [
+              {
+                'text' => "Categories:\n```#{categories}```\nText to classify: ```" \
+                          "#{call('replace_backticks_with_hash', input['text']&.strip)}```\n" \
+                          'Output the response as a JSON object with key "response". If no ' \
+                          'category is found, the "response" value should be null. ' \
+                          'Only respond with a JSON object and nothing else.'
+              }
+            ]
+          }
+        ],
+        'generationConfig' => {
+          'temperature' => 0
+        },
+        'safetySettings' => input['safetySettings'].presence
+      }.compact
+    end,
+    payload_for_analyze: lambda do |input|
+      {
+        'systemInstruction' => {
+          'role' => 'model',
+          'parts' => [
+            {
+              'text' => 'You are an assistant helping to analyze the provided information. ' \
+                        'Take note to answer only based on the information provided and nothing ' \
+                        'else. The information to analyze and query are delimited by triple ' \
+                        'backticks.'
+            }
+          ]
+        },
+        'contents' => [
+          {
+            'role' => 'user',
+            'parts' => [
+              {
+                'text' => 'Information to analyze:```' \
+                          "#{call('replace_backticks_with_hash', input['text'])}```\n" \
+                          "Query:```#{call('replace_backticks_with_hash', input['question'])}" \
+                          "```\nIf you don't understand the question or the answer isn't in " \
+                          'the information to analyze, input the value as null for "response". ' \
+                          'Only return a JSON object.'
+              }
+            ]
+          }
+        ],
+        'generationConfig' => {
+          'temperature' => 0
+        },
+        'safetySettings' => input['safetySettings'].presence
+      }.compact
+    end,
+    payload_for_analyze_image: lambda do |input|
+      {
+        'contents' => [
+          {
+            'role' => 'user',
+            'parts' => [
+              {
+                'text' => input['question']
+              },
+              {
+                'inlineData' => {
+                  'mimeType' => input['mime_type'],
+                  'data' => input['image']&.encode_base64
+                }
+              }
+            ]
+          }
+        ],
+        'generationConfig' => {
+          'temperature' => 0
+        },
+        'safetySettings' => input['safetySettings'].presence
+      }.compact
+    end,
+    payload_for_text_embedding: lambda do |input|
+      {
+        'instances' => [
+          {
+            'task_type' => input['task_type'].presence,
+            'title' => input['title'].presence,
+            'content' => input['text']
+          }.compact
+        ]
+      }
+    end,
     sample_record_output: lambda do |input|
       case input
       when 'send_message'
@@ -1908,26 +1066,6 @@
             { value: -0.04629135504364967 }
           ]
         }
-        when 'find_neighbors'
-          {
-            nearestNeighbors: [
-              {
-                id: 'query-1',
-                neighbors: [
-                  {
-                    datapoint: {
-                      datapointId: 'doc_001_chunk_1',
-                      featureVector: [0.1, 0.2, 0.3],
-                      crowdingTag: {
-                        crowdingAttribute: 'doc_001'
-                      }
-                    },
-                    distance: 0.95
-                  }
-                ]
-              }
-            ]
-          }
       end
     end,
     safety_ratings_output_sample: lambda do
@@ -1960,7 +1098,6 @@
         end
       end || {}
     end
-
   },
 
   object_definitions: {
@@ -2075,7 +1212,6 @@
         [
           { name: 'instances',
             type: 'array', of: 'object',
-            group: 'Instances',
             properties: [
               { name: 'prompt',
                 hint: 'Text input to generate model response. Can include preamble, ' \
@@ -2084,7 +1220,6 @@
             ] },
           { name: 'parameters',
             type: 'object',
-            group: 'Parameters',
             properties: [
               { name: 'temperature',
                 hint: 'The temperature is used for sampling during response generation, ' \
@@ -2172,7 +1307,6 @@
             of: 'object',
             hint: 'Specify the list of tools the model may use to generate ' \
                   'the next response.',
-            group: 'Tools',
             properties: [
               { name: 'functionDeclarations',
                 type: 'array',
@@ -2189,11 +1323,9 @@
                     hint: 'Provide the JSON schema object format.' }
                 ] }
             ] },
-
           { name: 'toolConfig',
             type: 'object',
             hint: 'This tool config is shared for all tools provided in the request.',
-            group: 'Tools',
             properties: [
               { name: 'functionCallingConfig',
                 type: 'object',
@@ -2218,12 +1350,10 @@
                     hint: 'Function names to call. Only set when the Mode is ANY.' }
                 ] }
             ] },
-
           { name: 'safetySettings',
             type: 'array',
             of: 'object',
             hint: 'Specify safety settings when relevant',
-            group: 'Safety',
             properties: [
               { name: 'category',
                 control_type: 'select',
@@ -2274,11 +1404,9 @@
                         'SEVERITY or PROBABILITY.'
                 } }
             ] },
-
           { name: 'generationConfig',
             type: 'object',
             hint: 'Specify parameters that are suitable for your use case',
-            group: 'Generation',
             properties: [
               { name: 'stopSequences',
                 type: 'array',
@@ -2352,11 +1480,9 @@
                 ngIf: 'input.generationConfig.responseMimeType == "application/json"',
                 hint: 'Define the output data schema.' }
             ] },
-
           { name: 'systemInstruction',
             type: 'object',
             hint: 'Specify the system instructions for the model.',
-            group: 'System instructions',
             properties: [
               { name: 'role',
                 hint: 'The role should be <b>model</b> when defining system instructions.' },
@@ -2454,14 +1580,12 @@
               pick_list: :message_types,
               extends_schema: true,
               optional: false,
-              hint: 'Choose the type of the message to send.',
-              group: 'Message' },
+              hint: 'Choose the type of the message to send.' },
             { name: 'messages',
               label: is_single_message ? 'Message' : 'Messages',
               type: 'object',
               optional: false,
-              properties: message_schema,
-              group: 'Message' }
+              properties: message_schema }
           ].compact
         ).concat(object_definitions['config_schema'])
       end
@@ -2564,8 +1688,7 @@
                 hint: 'Enter the output language. Eg. English'
               },
               toggle_hint: 'Select from list',
-              hint: 'Select the desired output language',
-              group: 'Task input' },
+              hint: 'Select the desired output language' },
             { name: 'from',
               label: 'Source language',
               optional: true,
@@ -2583,15 +1706,13 @@
               },
               toggle_hint: 'Select from list',
               hint: 'Select the source language. If this value is left blank, we will ' \
-                    'automatically attempt to identify it.',
-              group: 'Task input' },
+                    'automatically attempt to identify it.' },
             { name: 'text',
               label: 'Source text',
               type: 'string',
               control_type: 'text-area',
               optional: false,
-              hint: 'Enter the text to be translated. Please limit to 2000 tokens',
-              group: 'Task input' }
+              hint: 'Enter the text to be translated. Please limit to 2000 tokens' }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2614,8 +1735,7 @@
               type: 'string',
               control_type: 'text-area',
               optional: false,
-              hint: 'Provide the text to be summarized',
-              group: 'Task input' },
+              hint: 'Provide the text to be summarized' },
             { name: 'max_words',
               label: 'Maximum words',
               type: 'integer',
@@ -2623,8 +1743,7 @@
               optional: true,
               sticky: true,
               hint: 'Enter the maximum number of words for the summary. ' \
-                    'If left blank, defaults to 200.',
-              group: 'Summary options' }
+                    'If left blank, defaults to 200.' }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2646,8 +1765,7 @@
               label: 'Source text',
               control_type: 'text-area',
               optional: false,
-              hint: 'Provide the text to be parsed',
-              group: 'Task input' },
+              hint: 'Provide the text to be parsed' },
             { name: 'object_schema',
               optional: false,
               control_type: 'schema-designer',
@@ -2667,8 +1785,7 @@
                   optional: true,
                   label: 'Description'
                 }
-              ],
-              group: 'Schema' }
+              ] }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2691,8 +1808,7 @@
               type: 'string',
               control_type: 'text-area',
               optional: false,
-              hint: 'Enter a description for the email',
-              group: 'Task input' }
+              hint: 'Enter a description for the email' }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2710,28 +1826,12 @@
       fields: lambda do |_connection, _config_fields, object_definitions|
         object_definitions['text_model_schema'].concat(
           [
-            {
-              name: 'text',
+            { name: 'text',
               label: 'Source text',
               control_type: 'text-area',
               optional: false,
-              hint: 'Provide the text to be categorized',
-              group: 'Task input'
-            },
-            {
-              name: 'rules_source',
-              label: 'Rules source',
-              control_type: 'select',
-              pick_list: :rules_source_modes,
-              default: 'inline_list',
-              sticky: true,
-              optional: false,
-              hint: 'Choose how to provide categories/rules',
-              group: 'Rules'
-            },
-            {
-              name: 'categories',
-              ngIf: 'input.rules_source == "inline_list"',
+              hint: 'Provide the text to be categorized' },
+            { name: 'categories',
               control_type: 'key_value',
               label: 'List of categories',
               empty_list_title: 'List is empty',
@@ -2741,93 +1841,15 @@
               type: 'array',
               of: 'object',
               optional: false,
-              hint: 'Add categories (and optional rules) to classify into.',
+              hint: 'Create a list of categories to sort the text into. Rules are ' \
+                    'used to provide additional details to help classify what each category represents',
               properties: [
-                { name: 'key',  label: 'Category', hint: 'Category name' },
-                { name: 'rule', label: 'Rule (optional)', hint: 'E.g. subject contains: “invoice”' }
-              ],
-              group: 'Rules'
-            },
-
-            # Workato Data Table (conditional)
-            {
-              name: 'rules_table_id',
-              label: 'Data table',
-              ngIf: 'input.rules_source == "workato_table"',
-              optional: false,
-              control_type: 'select',
-              pick_list: :workato_datatables,
-              hint: 'Select a Workato Data Table with your categories/rules',
-              toggle_hint: 'Select from list',
-              toggle_field: {
-                name: 'rules_table_id',
-                label: 'Data table',
-                type: 'string',
-                control_type: 'text',
-                optional: false,
-                toggle_hint: 'Enter table ID manually'
-              },
-              group: 'Rules (Data Table)'
-            },
-            {
-              name: 'category_column',
-              label: 'Category column',
-              ngIf: 'input.rules_source == "workato_table"',
-              optional: false,
-              control_type: 'select',
-              pick_list: :workato_datatable_columns,
-              pick_list_params: { table_id: 'rules_table_id' },
-              hint: 'Column that holds the category name',
-              toggle_hint: 'Select from list',
-              toggle_field: {
-                name: 'category_column',
-                type: 'string',
-                control_type: 'text',
-                optional: false,
-                toggle_hint: 'Enter column name manually'
-              },
-              group: 'Rules (Data Table)'
-            },
-            {
-              name: 'rule_column',
-              label: 'Rule column (optional)',
-              ngIf: 'input.rules_source == "workato_table"',
-              optional: true,
-              control_type: 'select',
-              pick_list: :workato_datatable_columns,
-              pick_list_params: { table_id: 'rules_table_id' },
-              hint: 'Optional column with rule text (e.g., patterns). If blank, only category names will be used.',
-              toggle_hint: 'Select from list',
-              toggle_field: {
-                name: 'rule_column',
-                type: 'string',
-                control_type: 'text',
-                optional: true,
-                toggle_hint: 'Enter column name manually'
-              },
-              group: 'Rules (Data Table)'
-            },
-            {
-              name: 'only_active',
-              label: 'Only active rows',
-              ngIf: 'input.rules_source == "workato_table"',
-              type: 'boolean',
-              control_type: 'checkbox',
-              sticky: true,
-              hint: 'If your table has an "active" boolean column, only include rows where active = true',
-              group: 'Filter'
-            },
-            {
-              name: 'active_column',
-              label: 'Active column (optional)',
-              ngIf: 'input.rules_source == "workato_table" && input.only_active',
-              optional: true,
-              control_type: 'select',
-              pick_list: :workato_datatable_columns,
-              pick_list_params: { table_id: 'rules_table_id' },
-              hint: 'Name of the boolean column to filter on (true means active).',
-              group: 'Filter'
-            }
+                { name: 'key',
+                  label: 'Category',
+                  hint: 'Enter category name' },
+                { name: 'rule',
+                  hint: 'Enter rule' }
+              ] }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2848,14 +1870,12 @@
               label: 'Source text',
               control_type: 'text-area',
               hint: 'Provide the text to be analyzed.',
-              optional: false,
-              group: 'Task input' },
+              optional: false },
             { name: 'question',
               label: 'Instruction',
               optional: false,
               hint: 'Enter analysis instructions, such as an analysis ' \
-                    'technique or question to be answered.',
-              group: 'Instruction' }
+                    'technique or question to be answered.' }
           ]
         ).concat(object_definitions['config_schema'].only('safetySettings'))
       end
@@ -2889,23 +1909,19 @@
               hint: 'Provide the model you want to use in this format: ' \
                     '<b>publishers/{publisher}/models/{model}</b>. ' \
                     'E.g. publishers/google/models/gemini-1.5-pro-001'
-            },
-            group: 'Model' },
+            } },
           { name: 'question',
             label: 'Your question about the image',
             hint: 'Please specify a clear question for image analysis.',
-            optional: false,
-            group: 'Prompt' },
+            optional: false },
           { name: 'image',
             label: 'Image data',
             hint: 'Provide the image to be analyzed.',
-            optional: false,
-            group: 'Image' },
+            optional: false },
           { name: 'mime_type',
             label: 'MIME type',
             optional: false,
-            hint: 'Provide the MIME type of the image. E.g. image/jpeg.',
-            group: 'Image' }
+            hint: 'Provide the MIME type of the image. E.g. image/jpeg.' }
         ].concat(object_definitions['config_schema'].only('safetySettings'))
       end
     },
@@ -2939,20 +1955,18 @@
               hint: 'Provide the model you want to use in this format: ' \
                     '<b>publishers/{publisher}/models/{model}</b>. ' \
                     'E.g. publishers/google/models/text-embedding-004'
-            },
-            group: 'Model' },
+            } },
           { name: 'text',
             label: 'Text for embedding generation',
             control_type: 'text-area',
             optional: false,
-            hint: 'Input text must not exceed 8192 tokens (approximately 6000 words).',
-            group: 'Text' },
+            hint: 'Input text must not exceed 8192 tokens (approximately 6000 words).' },
           { name: 'task_type',
             sticky: true,
             extends_schema: true,
             ngIf: 'input.model != "publishers/google/models/textembedding-gecko@001"',
             control_type: 'select',
-            pick_list: :embedding_task_list,
+            pick_list: 'embedding_task_list',
             hint: 'Provide the intended downstream application to help the model produce ' \
                   'better embeddings. If left blank, defaults to Retrieval query.',
             toggle_hint: 'Select from list',
@@ -2967,13 +1981,11 @@
               hint: 'Allowed values are: RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT, ' \
                     'SEMANTIC_SIMILARITY, CLASSIFICATION, CLUSTERING, ' \
                     'QUESTION_ANSWERING or FACT_VERIFICATION.'
-            },
-            group: 'Task options' },
+            } },
           { name: 'title',
             sticky: true,
             ngIf: 'input.task_type == "RETRIEVAL_DOCUMENT"',
-            hint: 'Used to help the model produce better embeddings.',
-            group: 'Task options' }
+            hint: 'Used to help the model produce better embeddings.' }
         ]
       end
     },
@@ -2986,138 +1998,6 @@
             properties: [
               { name: 'value', type: 'number' }
             ] }
-        ]
-      end
-    },
-    find_neighbors_input: {
-      fields: lambda do |_connection, _config_fields, _object_definitions|
-        [
-          { name: 'index_endpoint_host',
-            label: 'Index endpoint host',
-            optional: false,
-            hint: 'The host for the index endpoint (no path). Example: 1234.us-central1.vdb.vertexai.goog '\
-                  'for public endpoints, or your PSC DNS/IP. Do NOT include https://.',
-            group: 'Endpoint' },
-
-          { name: 'index_endpoint_id',
-            label: 'Index endpoint ID',
-            optional: false,
-            hint: 'Resource ID only (not full path). Find it on the Index endpoint details page.',
-            group: 'Index context' },
-
-          { name: 'deployedIndexId',
-            label: 'Deployed index ID',
-            optional: false,
-            sticky: true,
-            hint: 'The deployed index to query (from your index endpoint).',
-            group: 'Index context' },
-
-          { name: 'returnFullDatapoint',
-            label: 'Return full datapoints',
-            type: 'boolean',
-            control_type: 'checkbox',
-            hint: 'If enabled, returns full vectors and restricts. Increases latency and cost.',
-            group: 'Options' },
-
-          {
-            name: 'queries',
-            type: 'array',
-            of: 'object',
-            optional: false,
-            hint: 'One or more nearest-neighbor queries.',
-            group: 'Queries',
-            properties: [
-              {
-                name: 'datapoint',
-                type: 'object',
-                properties: [
-                  { name: 'datapointId', label: 'Datapoint ID' },
-                  { name: 'featureVector', label: 'Feature vector', type: 'array', of: 'number',
-                    hint: 'Dense embedding (float array). Provide either a vector or an ID (or both).' },
-                  { name: 'sparseEmbedding', type: 'object', properties: [
-                    { name: 'values', type: 'array', of: 'number' },
-                    { name: 'dimensions', type: 'array', of: 'integer' }
-                  ]},
-                  { name: 'restricts', type: 'array', of: 'object', properties: [
-                    { name: 'namespace' },
-                    { name: 'allowList', type: 'array', of: 'string' },
-                    { name: 'denyList',  type: 'array', of: 'string' }
-                  ]},
-                  { name: 'numericRestricts', type: 'array', of: 'object', properties: [
-                    { name: 'namespace' },
-                    { name: 'op', control_type: 'select',
-                      pick_list: :numeric_comparison_op,
-                      toggle_hint: 'Select from list',
-                      toggle_field: { name: 'op', type: 'string', control_type: 'text', optional: true,
-                                      toggle_hint: 'Use custom value' } },
-                    { name: 'valueInt',    type: 'integer', control_type: 'integer' },
-                    { name: 'valueFloat',  type: 'number',  control_type: 'number'  },
-                    { name: 'valueDouble', type: 'number',  control_type: 'number'  }
-                  ]},
-                  { name: 'crowdingTag', type: 'object', properties: [
-                    { name: 'crowdingAttribute' }
-                  ], hint: 'Optional; used to improve result diversity by limiting same-tag neighbors.' }
-                ]
-              },
-
-              { name: 'neighborCount', type: 'integer', control_type: 'integer',
-                hint: 'k — number of neighbors to return.' },
-              { name: 'approximateNeighborCount', type: 'integer', control_type: 'integer',
-                hint: 'Candidate pool size before exact re-ranking.' },
-              { name: 'perCrowdingAttributeNeighborCount', type: 'integer', control_type: 'integer',
-                hint: 'Max neighbors sharing same crowding attribute.' },
-              { name: 'fractionLeafNodesToSearchOverride', type: 'number', control_type: 'number',
-                hint: '0.0–1.0. Higher → better recall, higher latency.' }
-            ]
-          }
-        ]
-      end
-    },
-    find_neighbors_output: {
-      fields: lambda do |_connection, _config_fields, _object_definitions|
-        [
-          {
-            name: 'nearestNeighbors',
-            type: 'array',
-            of: 'object',
-            properties: [
-              { name: 'id', label: 'Query datapoint ID' },
-              {
-                name: 'neighbors',
-                type: 'array',
-                of: 'object',
-                properties: [
-                  { name: 'distance', type: 'number' },
-                  {
-                    name: 'datapoint', type: 'object',
-                    properties: [
-                      { name: 'datapointId' },
-                      { name: 'featureVector', type: 'array', of: 'number' },
-                      { name: 'restricts', type: 'array', of: 'object', properties: [
-                        { name: 'namespace' },
-                        { name: 'allowList', type: 'array', of: 'string' },
-                        { name: 'denyList',  type: 'array', of: 'string' }
-                      ]},
-                      { name: 'numericRestricts', type: 'array', of: 'object', properties: [
-                        { name: 'namespace' },
-                        { name: 'op' },
-                        { name: 'valueInt',    type: 'integer' },
-                        { name: 'valueFloat',  type: 'number' },
-                        { name: 'valueDouble', type: 'number' }
-                      ]},
-                      { name: 'crowdingTag', type: 'object', properties: [
-                        { name: 'crowdingAttribute' }
-                      ]},
-                      { name: 'sparseEmbedding', type: 'object', properties: [
-                        { name: 'values', type: 'array', of: 'number' },
-                        { name: 'dimensions', type: 'array', of: 'integer' }
-                      ]}
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
         ]
       end
     },
@@ -3169,18 +2049,14 @@
               hint: 'Provide the model you want to use in this format: ' \
                     '<b>publishers/{publisher}/models/{model}</b>. ' \
                     'E.g. publishers/google/models/gemini-1.5-pro-001'
-            },
-            group: 'Model'
-          }
+            } }
         ]
       end
     }
-
   },
-
   pick_lists: {
-    available_text_models: lambda do |connection|
-      static = [
+    available_text_models: lambda do
+      [
         ['Gemini 1.0 Pro', 'publishers/google/models/gemini-pro'],
         ['Gemini 1.5 Pro', 'publishers/google/models/gemini-1.5-pro'],
         ['Gemini 1.5 Flash', 'publishers/google/models/gemini-1.5-flash'],
@@ -3190,10 +2066,9 @@
         ['Gemini 2.5 Flash', 'publishers/google/models/gemini-2.5-flash'],
         ['Gemini 2.5 Flash Lite', 'publishers/google/models/gemini-2.5-flash-lite']
       ]
-      call('dynamic_model_picklist', connection, :text, static)
     end,
-    available_image_models: lambda do |connection|
-      static = [
+    available_image_models: lambda do
+      [
         ['Gemini Pro Vision', 'publishers/google/models/gemini-pro-vision'],
         ['Gemini 1.5 Pro', 'publishers/google/models/gemini-1.5-pro'],
         ['Gemini 1.5 Flash', 'publishers/google/models/gemini-1.5-flash'],
@@ -3203,21 +2078,16 @@
         ['Gemini 2.5 Flash', 'publishers/google/models/gemini-2.5-flash'],
         ['Gemini 2.5 Flash Lite', 'publishers/google/models/gemini-2.5-flash-lite']
       ]
-      call('dynamic_model_picklist', connection, :image, static)
     end,
-    available_embedding_models: lambda do |connection|
-      static = [
+    available_embedding_models: lambda do
+      [
         ['Text embedding gecko-001', 'publishers/google/models/textembedding-gecko@001'],
         ['Text embedding gecko-003', 'publishers/google/models/textembedding-gecko@003'],
         ['Text embedding-004', 'publishers/google/models/text-embedding-004']
       ]
-      call('dynamic_model_picklist', connection, :embedding, static)
     end,
     message_types: lambda do
       %w[single_message chat_transcript].map { |m| [m.humanize, m] }
-    end,
-    numeric_comparison_op: lambda do
-      %w[EQUAL NOT_EQUAL LESS LESS_EQUAL GREATER GREATER_EQUAL].map { |m| [m.humanize, m] }
     end,
     safety_categories: lambda do
       %w[HARM_CATEGORY_UNSPECIFIED HARM_CATEGORY_HATE_SPEECH
@@ -3272,62 +2142,6 @@
         ['Question answering', 'QUESTION_ANSWERING'],
         ['Fact verification', 'FACT_VERIFICATION']
       ]
-    end,
-    rules_source_modes: lambda do
-      [
-        ['Inline list (manual)', 'inline_list'],
-        ['Workato data table',   'workato_table']
-      ]
-    end,
-    workato_datatables: lambda do |connection|
-      # Return empty if no API token configured
-      if connection['workato_api_token'].to_s.strip.blank?
-        puts "Workato API token not configured; returning empty datatable list"
-        return []
-      end
-
-      begin
-        tables = call('get_cached_datatables', connection)
-        
-        # Sort tables alphabetically for better UX
-        tables.
-          sort_by { |t| t['name'].to_s.downcase }.
-          map { |t| [t['name'].presence || "Table #{t['id']}", t['id']] }
-      rescue => e
-        puts "Failed to load datatables: #{e.message}"
-        []  # Return empty array on error to prevent action failure
-      end
-    end,
-    workato_datatable_columns: lambda do |connection, table_id:|
-      # Return empty if no API token configured
-      return [] if table_id.blank?
-      if connection['workato_api_token'].to_s.strip.blank?
-        puts "Workato API token not configured; returning empty column list"
-        return []
-      end
-      
-      begin
-        columns = call('get_cached_table_columns', connection, table_id)
-        
-        # Group columns by type for better organization
-        grouped = columns.group_by { |c| c['type'] || 'unknown' }
-        
-        # Build sorted list with type indicators
-        result = []
-        ['string', 'boolean', 'integer', 'number', 'datetime'].each do |type|
-          if grouped[type].present?
-            grouped[type].
-              sort_by { |c| c['name'].to_s.downcase }.
-              each { |c| result << ["#{c['name']} (#{type})", c['name']] }
-          end
-        end
-        
-        result
-      rescue => e
-        puts "Failed to load columns for table #{table_id}: #{e.message}"
-        []
-      end
     end
   }
-  
 }
