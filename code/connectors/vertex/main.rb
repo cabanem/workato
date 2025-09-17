@@ -1344,8 +1344,17 @@
 
       models = []
       page_token = nil
+      max_pages = 10 # safety to avoid infinite loops
+      page_count = 0
+
       begin
         loop do
+          page_count += 1
+          if page_count > max_pages
+            puts "Warning: Reached maximum page limit (#{max_pages}) for model listing"
+            break
+          end
+
           resp = get(url)
                   .params(
                     page_size: 200,
@@ -1354,15 +1363,26 @@
                     list_all_versions: true
                   )
                   .after_error_response(/.*/) do |code, body, _hdrs, message|
-                    error("List publisher models failed (HTTP #{code}) - #{message}: #{body}")
+                    # Log but don't error - fall back to static list
+                    puts "Model listing failed (HTTP #{code}): #{message}"
+                    raise "API Error"
                   end
 
-          models.concat(resp['publisherModels'] || [])
-          page_token = resp['nextPageToken']
-          break if page_token.blank?
+          batch = resp['publisherModels'] || []
+          models.concat(batch)
+
+          new_page_token = resp['nextPageToken']
+          # Check for stuck pagination
+          if new_page_token == page_token
+            puts "Warning: Pagination stuck with same token"
+            break
+          end
+          
+          page_token = new_page_token
+          break if page_token.blank? || batch.empty?
         end
-      rescue StandardError
-        # On any failure, return empty list and let caller choose fallback
+      rescue => e
+        puts "Failed to fetch dynamic models: #{e.message}. Using static list."
         models = []
       end
 
