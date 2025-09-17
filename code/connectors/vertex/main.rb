@@ -1406,27 +1406,40 @@
       return if model_name.blank?
       return unless connection['validate_model_on_run']
 
+      # Validate model name format
+      unless model_name.match?(/^publishers\/[^\/]+\/models\/[^\/]+$/)
+        error("Invalid model name format: #{model_name}. Expected format: publishers/{publisher}/models/{model}")
+      end
+
       region = connection['region'].presence || 'us-central1'
       url = "https://#{region}-aiplatform.googleapis.com/v1/#{model_name}"
 
-      # Prefer v1 get (has launchStage); BASIC view is default; ask FULL to be safe.
-      # https://cloud.google.com/vertex-ai/docs/reference/rest/v1/publishers.models/get
-      resp = get(url)
-              .params(view: 'PUBLISHER_MODEL_VIEW_FULL')
-              .after_error_response(/.*/) do |code, body, _hdrs, message|
-                error("Model validation failed (HTTP #{code}) for #{model_name} in #{region}: #{message}: #{body}")
-              end
+      begin
+        resp = get(url)
+                .params(view: 'PUBLISHER_MODEL_VIEW_FULL')
+                .after_error_response(/404/) do |code, body, _hdrs, message|
+                  error("Model '#{model_name}' not found in region '#{region}'. Please check model name and region.")
+                end
+                .after_error_response(/403/) do |code, body, _hdrs, message|
+                  error("Access denied to model '#{model_name}'. Please check your project permissions.")
+                end
+                .after_error_response(/.*/) do |code, body, _hdrs, message|
+                  error("Model validation failed (HTTP #{code}): #{message}")
+                end
 
-      # Enforce GA unless preview is explicitly allowed
-      unless connection['include_preview_models']
-        stage = resp['launchStage'].to_s
-        if stage.present? && stage != 'GA'
-          error("Model '#{model_name}' is not GA (launchStage=#{stage}). " \
-                "Uncheck 'Validate model before run' or enable 'Include preview/experimental models'.")
+        # Enforce GA unless preview is explicitly allowed
+        unless connection['include_preview_models']
+          stage = resp['launchStage'].to_s
+          if stage.present? && stage != 'GA'
+            error("Model '#{model_name}' is not Generally Available (launchStage=#{stage}). " \
+                  "Enable 'Include preview/experimental models' in connection settings to use this model.")
+          end
         end
-      end
 
-      true
+        true
+      rescue => e
+        error("Failed to validate model: #{e.message}")
+      end
     end,
     ensure_workato_api!: lambda do |connection|
       missing = []
