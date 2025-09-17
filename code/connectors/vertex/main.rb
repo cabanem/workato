@@ -1553,19 +1553,59 @@
 
       # connection not passed here; Workato provides it to execute/payload via closure binding
       connection = connection() # SDK helper; current connection hash
+      
+      # Fetch table metadata first to validate columns
+      begin
+        table_info = call('list_datatable_columns', connection, rules_table_id)
+        columns = table_info['columns'] || table_info.dig('data_table', 'columns') || []
+        column_names = columns.map { |c| c['name'] }
+        
+        # Validate required columns exist
+        unless column_names.include?(category_column)
+          error("Category column '#{category_column}' not found in table. Available columns: #{column_names.join(', ')}")
+        end
+        
+        if rule_column.present? && !column_names.include?(rule_column)
+          error("Rule column '#{rule_column}' not found in table. Available columns: #{column_names.join(', ')}")
+        end
+        
+        if input['only_active'] && input['active_column'].present?
+          active_col = input['active_column']
+          unless column_names.include?(active_col)
+            error("Active column '#{active_col}' not found in table. Available columns: #{column_names.join(', ')}")
+          end
+        end
+      rescue => e
+        error("Failed to validate table structure: #{e.message}")
+      end
+      
+      # Fetch rows with validated columns
       rows = call('fetch_datatable_rows', connection, rules_table_id, 2000)
 
+      # Apply active filter if specified
       if input['only_active'] && input['active_column'].present?
         active_col = input['active_column']
         rows = rows.select { |r| !!r[active_col] }
       end
 
-      rows.map do |r|
-        key  = r[category_column]
-        rule = rule_column.present? ? r[rule_column] : nil
+      # Build categories list with validation
+      categories = rows.map do |r|
+        key = r[category_column]
         next nil if key.blank?
-        rule.present? ? "#{key} - #{rule}" : key.to_s
+        
+        if rule_column.present?
+          rule = r[rule_column]
+          rule.present? ? "#{key} - #{rule}" : key.to_s
+        else
+          key.to_s
+        end
       end.compact.uniq
+      
+      if categories.empty?
+        error("No valid categories found in the table. Please check your data and column mappings.")
+      end
+      
+      categories
     end
 
   },
