@@ -1,3 +1,8 @@
+# Data Contracts 
+
+Connectors: **RAG Utilities**, **Vertex AI**
+
+--- 
 
 ## 1. Text Preparation Contracts
 
