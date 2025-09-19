@@ -694,10 +694,10 @@
     },
     # --- Embedding and Vector Search actions ---
     generate_embeddings: {
-      title: 'Generate text embeddings (Batch)',
+      title: 'Generate text embeddings',
       subtitle: 'Generate embeddings for multiple texts in batch',
-      description: "Generate text <span class='provider'>embeddings</span> for multiple texts using " \
-                   "Google models in <span class='provider'>Google Vertex AI</span>",
+      description: "Generate text embeddings for multiple texts using models from Vertex AI",
+      batch: true,
       help: {
         body: 'Batch text embedding generates numerical vectors for multiple text inputs efficiently. ' \
               'It processes an array of texts and returns vectors that capture the meaning ' \
@@ -829,8 +829,7 @@
     generate_embedding_single: {
       title: 'Generate single text embedding',
       subtitle: 'Generate embedding for a single text input',
-      description: "Generate text <span class='provider'>embedding</span> for a single text using " \
-                   "Google models in <span class='provider'>Google Vertex AI</span>",
+      description: "Generate text embedding for a single text input",
       help: {
         body: 'Generate a numerical vector for a single text input. This is optimized for RAG query flows ' \
               'where you need to embed a single user query to find similar documents. The vector captures ' \
@@ -4117,3 +4116,4 @@
   }
   
 }
+
