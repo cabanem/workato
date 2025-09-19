@@ -96,8 +96,12 @@
       },
       { # - validate_model_on_run
         name: 'validate_model_on_run', label: 'Validate model before run', group: 'Model discovery and validation',
-        type: 'boolean', control_type: 'checkbox', optional: true, sticky: true, 
-        hint: 'Pre-flight check the chosen model and your project access before sending the request. Recommended.' }
+        type: 'boolean', control_type: 'checkbox', optional: true, sticky: true,
+        hint: 'Pre-flight check the chosen model and your project access before sending the request. Recommended.' },
+      { # - enable_rate_limiting
+        name: 'enable_rate_limiting', label: 'Enable rate limiting', group: 'Model discovery and validation',
+        type: 'boolean', control_type: 'checkbox', optional: true, default: true,
+        hint: 'Automatically throttle requests to stay within Vertex AI quotas' }
 
     ],
     authorization: {
@@ -274,11 +278,21 @@
         # Build the url
         url = "projects/#{connection['project']}/locations/#{connection['region']}" \
               "/#{input['model']}:generateContent"
-        # Make the request
-        post(url, payload).
-          after_error_response(/.*/) do |code, body, _header, message|
-            call('handle_vertex_error', connection, code, body, message)
+
+        # Apply rate limiting
+        rate_limit_info = call('enforce_vertex_rate_limits', connection, input['model'], 'inference')
+
+        # Make the request with 429 fallback
+        response = call('handle_429_with_backoff', connection, 'inference', input['model']) do
+          post(url, payload).
+            after_error_response(/.*/) do |code, body, _header, message|
+              call('handle_vertex_error', connection, code, body, message)
+            end
         end
+
+        # Add rate limit info to response
+        response['rate_limit_status'] = rate_limit_info
+        response
       end,
 
       output_fields: lambda do |object_definitions|
@@ -312,11 +326,17 @@
         # Build the url
         url = "projects/#{connection['project']}/locations/#{connection['region']}" \
               "/#{input['model']}:generateContent"
-        # Make the request
-        response = post(url, payload).
-          after_error_response(/.*/) do |code, body, _header, message|
-            call('handle_vertex_error', connection, code, body, message)
-          end
+
+        # Apply rate limiting
+        rate_limit_info = call('enforce_vertex_rate_limits', connection, input['model'], 'inference')
+
+        # Make the request with 429 fallback
+        response = call('handle_429_with_backoff', connection, 'inference', input['model']) do
+          post(url, payload).
+            after_error_response(/.*/) do |code, body, _header, message|
+              call('handle_vertex_error', connection, code, body, message)
+            end
+        end
         # Extract and return the response
         call('extract_generic_response', response, true)
       end,
@@ -350,11 +370,17 @@
         # Build the url
         url = "projects/#{connection['project']}/locations/#{connection['region']}" \
               "/#{input['model']}:generateContent"
-        # Make the request
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
+
+        # Apply rate limiting
+        rate_limit_info = call('enforce_vertex_rate_limits', connection, input['model'], 'inference')
+
+        # Make the request with 429 fallback
+        response = call('handle_429_with_backoff', connection, 'inference', input['model']) do
+          post(url, payload).
+            after_error_response(/.*/) do |code, body, _header, message|
+              call('handle_vertex_error', connection, code, body, message)
+            end
+        end
         # Extract and return the response
         call('extract_generic_response', response, false)
       end,
@@ -390,11 +416,17 @@
         # Build the url
         url = "projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent"
-        # Make the request
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
+
+        # Apply rate limiting
+        rate_limit_info = call('enforce_vertex_rate_limits', connection, input['model'], 'inference')
+
+        # Make the request with 429 fallback
+        response = call('handle_429_with_backoff', connection, 'inference', input['model']) do
+          post(url, payload).
+            after_error_response(/.*/) do |code, body, _header, message|
+              call('handle_vertex_error', connection, code, body, message)
+            end
+        end
         # Extract and return the response
         call('extract_parsed_response', response)
       end,
@@ -433,10 +465,17 @@
         # Build the url
         url ="projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent"
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
+
+        # Apply rate limiting
+        rate_limit_info = call('enforce_vertex_rate_limits', connection, input['model'], 'inference')
+
+        # Make the request with 429 fallback
+        response = call('handle_429_with_backoff', connection, 'inference', input['model']) do
+          post(url, payload).
+            after_error_response(/.*/) do |code, body, _header, message|
+              call('handle_vertex_error', connection, code, body, message)
+            end
+        end
         # Extract and return the response
         call('extract_generated_email_response', response)
       end,
@@ -545,10 +584,16 @@
         url = "projects/#{connection['project']}/locations/#{connection['region']}" \
                         "/#{input['model']}:generateContent"
 
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
+        # Apply rate limiting
+        rate_limit_info = call('enforce_vertex_rate_limits', connection, input['model'], 'inference')
+
+        # Make the request with 429 fallback
+        response = call('handle_429_with_backoff', connection, 'inference', input['model']) do
+          post(url, payload).
+            after_error_response(/.*/) do |code, body, _header, message|
+              call('handle_vertex_error', connection, code, body, message)
+            end
+        end
 
         # Extract and return the response
         call('extract_ai_classify_response', response, input)
@@ -579,11 +624,17 @@
         # Build the url
         url = "projects/#{connection['project']}/locations/#{connection['region']}" \
               "/#{input['model']}:generateContent"
-        # Make the request
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
+
+        # Apply rate limiting
+        rate_limit_info = call('enforce_vertex_rate_limits', connection, input['model'], 'inference')
+
+        # Make the request with 429 fallback
+        response = call('handle_429_with_backoff', connection, 'inference', input['model']) do
+          post(url, payload).
+            after_error_response(/.*/) do |code, body, _header, message|
+              call('handle_vertex_error', connection, code, body, message)
+            end
+        end
         # Extract and return the response
         call('extract_generic_response', response, true)
       end,
@@ -618,11 +669,17 @@
         # Build the url
         url = "projects/#{connection['project']}/locations/#{connection['region']}" \
               "/#{input['model']}:generateContent"
-        # Make the request
-        response = post(url, payload).
-                  after_error_response(/.*/) do |code, body, _header, message|
-                    call('handle_vertex_error', connection, code, body, message)
-                  end
+
+        # Apply rate limiting
+        rate_limit_info = call('enforce_vertex_rate_limits', connection, input['model'], 'inference')
+
+        # Make the request with 429 fallback
+        response = call('handle_429_with_backoff', connection, 'inference', input['model']) do
+          post(url, payload).
+            after_error_response(/.*/) do |code, body, _header, message|
+              call('handle_vertex_error', connection, code, body, message)
+            end
+        end
         # Extract and return the response
         call('extract_generic_response', response, false)
       end,
@@ -1339,6 +1396,133 @@
       end
     end,
     # ─────────────────────────────────────────────────────────────────────────────
+    # -- Rate limiting utilities
+    # ─────────────────────────────────────────────────────────────────────────────
+    enforce_vertex_rate_limits: lambda do |connection, model, action_type = 'inference'|
+      # Skip if rate limiting is disabled
+      return { requests_last_minute: 0, limit: 0, throttled: false, sleep_ms: 0 } unless connection['enable_rate_limiting']
+
+      # Determine model family and limits
+      model_family = case model.to_s.downcase
+      when /gemini.*pro/
+        'gemini-pro'
+      when /gemini.*flash/
+        'gemini-flash'
+      when /embedding/
+        'embedding'
+      else
+        'gemini-pro' # default to most restrictive
+      end
+
+      # Model-specific limits (requests per minute)
+      limits = {
+        'gemini-pro' => 300,
+        'gemini-flash' => 600,
+        'embedding' => 600
+      }
+
+      limit = limits[model_family]
+      project = connection['project'] || 'default'
+      current_time = Time.now.to_i
+
+      # Cache key for this project/model combination
+      cache_prefix = "vertex_rate_#{project}_#{model_family}"
+
+      # Get current request count in the last 60 seconds
+      requests_in_window = 0
+      begin
+        # Check last 60 seconds of timestamps
+        60.times do |i|
+          timestamp = current_time - i
+          cache_key = "#{cache_prefix}_#{timestamp}"
+          count = workato.cache.get(cache_key) || 0
+          requests_in_window += count.to_i
+        end
+      rescue => e
+        # If cache fails, allow the request but log warning
+        puts "Rate limit cache read failed: #{e.message}"
+        return { requests_last_minute: 0, limit: limit, throttled: false, sleep_ms: 0 }
+      end
+
+      # Check if we're at the limit
+      if requests_in_window >= limit
+        # Calculate how long to wait
+        # Find the oldest request timestamp to know when window will refresh
+        oldest_valid_timestamp = current_time - 59 # 60 second window
+        sleep_seconds = oldest_valid_timestamp + 60 - current_time
+        sleep_seconds = [sleep_seconds, 1].max # minimum 1 second
+
+        # Add jitter to prevent thundering herd (0-1 second)
+        jitter = rand
+        total_sleep = sleep_seconds + jitter
+        sleep_ms = (total_sleep * 1000).to_i
+
+        puts "Rate limit reached for #{model_family} (#{requests_in_window}/#{limit}). Sleeping #{total_sleep.round(2)}s"
+        sleep(total_sleep)
+
+        return {
+          requests_last_minute: requests_in_window,
+          limit: limit,
+          throttled: true,
+          sleep_ms: sleep_ms
+        }
+      end
+
+      # Record this request
+      begin
+        current_key = "#{cache_prefix}_#{current_time}"
+        current_count = workato.cache.get(current_key) || 0
+        workato.cache.set(current_key, current_count.to_i + 1, 70) # TTL slightly longer than window
+      rescue => e
+        puts "Rate limit cache write failed: #{e.message}"
+      end
+
+      {
+        requests_last_minute: requests_in_window + 1,
+        limit: limit,
+        throttled: false,
+        sleep_ms: 0
+      }
+    end,
+    handle_429_with_backoff: lambda do |connection, action_type, model, &block|
+      max_retries = 3
+      base_delay = 1.0
+
+      max_retries.times do |attempt|
+        begin
+          # Execute the block (API call)
+          return block.call
+        rescue => e
+          # Check if this is a 429 error
+          if e.message.include?('429') || e.message.include?('Rate limit')
+            if attempt < max_retries - 1
+              # Calculate exponential backoff delay
+              delay = base_delay * (2 ** attempt)
+
+              # Try to extract Retry-After header from error if available
+              retry_after = nil
+              if e.respond_to?(:response) && e.response.respond_to?(:headers)
+                retry_after = e.response.headers['Retry-After']&.to_i
+              end
+
+              # Use Retry-After if available, otherwise use exponential backoff
+              actual_delay = retry_after || delay
+
+              puts "429 rate limit hit for #{model} (attempt #{attempt + 1}/#{max_retries}). Retrying in #{actual_delay}s"
+              sleep(actual_delay)
+            else
+              # Max retries exceeded
+              error("Rate limit exceeded for #{model} after #{max_retries} attempts. " \
+                    "Please reduce request frequency or enable automatic rate limiting in connection settings.")
+            end
+          else
+            # Not a rate limit error, re-raise
+            raise e
+          end
+        end
+      end
+    end,
+    # ─────────────────────────────────────────────────────────────────────────────
     # -- Vertex model discovery and validation
     # ─────────────────────────────────────────────────────────────────────────────
     fetch_publisher_models: lambda do |connection, publisher = 'google'|
@@ -1989,6 +2173,7 @@
       total_tokens = 0
       embeddings = []
       batch_size = 25  # Vertex AI's limit for embedding batch requests
+      rate_limit_info = { requests_last_minute: 0, limit: 0, throttled: false, sleep_ms: 0 }
 
       # Build the URL once
       url = "projects/#{connection['project']}/locations/#{connection['region']}" \
@@ -2014,11 +2199,16 @@
 
             payload = { 'instances' => instances }
 
-            # Make batch API call
-            response = post(url, payload).
-              after_error_response(/.*/) do |code, body, _header, message|
-                call('handle_vertex_error', connection, code, body, message)
-              end
+            # Apply rate limiting
+            rate_limit_info = call('enforce_vertex_rate_limits', connection, model, 'embedding')
+
+            # Make batch API call with 429 fallback
+            response = call('handle_429_with_backoff', connection, 'embedding', model) do
+              post(url, payload).
+                after_error_response(/.*/) do |code, body, _header, message|
+                  call('handle_vertex_error', connection, code, body, message)
+                end
+            end
 
             # Process batch response - each prediction corresponds to each instance
             predictions = response['predictions'] || []
@@ -2142,7 +2332,8 @@
         'api_calls_saved' => api_calls_saved,
         'estimated_cost_savings' => estimated_cost_savings.round(4),
         'pass_fail' => all_successful,
-        'action_required' => all_successful ? 'ready_for_indexing' : 'retry_failed_embeddings'
+        'action_required' => all_successful ? 'ready_for_indexing' : 'retry_failed_embeddings',
+        'rate_limit_status' => rate_limit_info
       }
     end,
 
@@ -2176,11 +2367,16 @@
         url = "projects/#{connection['project']}/locations/#{connection['region']}" \
               "/#{model}:predict"
 
-        # Make the request
-        response = post(url, payload).
-          after_error_response(/.*/) do |code, body, _header, message|
-            call('handle_vertex_error', connection, code, body, message)
-          end
+        # Apply rate limiting
+        rate_limit_info = call('enforce_vertex_rate_limits', connection, model, 'embedding')
+
+        # Make the request with 429 fallback
+        response = call('handle_429_with_backoff', connection, 'embedding', model) do
+          post(url, payload).
+            after_error_response(/.*/) do |code, body, _header, message|
+              call('handle_vertex_error', connection, code, body, message)
+            end
+        end
 
         # Extract embedding from response
         vector = response&.dig('predictions', 0, 'embeddings', 'values') ||
@@ -2195,7 +2391,8 @@
           'vector' => vector,
           'dimensions' => vector.length,
           'model_used' => model,
-          'token_count' => token_count
+          'token_count' => token_count,
+          'rate_limit_status' => rate_limit_info
         }
 
       rescue => e
@@ -3382,7 +3579,15 @@
             ] },
           { name: 'modelVersion' },
           { name: 'createTime', type: 'date_time' },
-          { name: 'responseId' }
+          { name: 'responseId' },
+          { name: 'rate_limit_status',
+            type: 'object',
+            properties: [
+              { name: 'requests_last_minute', type: 'integer', label: 'Requests in last minute' },
+              { name: 'limit', type: 'integer', label: 'Rate limit (requests/minute)' },
+              { name: 'throttled', type: 'boolean', label: 'Was throttled' },
+              { name: 'sleep_ms', type: 'integer', label: 'Sleep time (milliseconds)' }
+            ] }
         ]
       end
     },
